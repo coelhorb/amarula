@@ -102,7 +102,8 @@ defmodule Amarula.Protocol.Messages.ConversationSender do
     LidMappingFileStore,
     SessionCustodian,
     SessionInjector,
-    SessionStore
+    SessionStore,
+    TcTokenStore
   }
 
   alias Amarula.Protocol.Signal.Group.SenderKeyName
@@ -331,6 +332,7 @@ defmodule Amarula.Protocol.Messages.ConversationSender do
          {:ok, ctx} <- ensure_sessions(ctx),
          {:ok, ctx} <- encrypt(ctx),
          :ok <- relay(ctx) do
+      maybe_issue_tctoken(ctx)
       {:ok, %{result: :ok, error_stage: nil, error_reason: nil}}
     else
       {:error, {_stage, _reason} = stage_reason} ->
@@ -677,7 +679,8 @@ defmodule Amarula.Protocol.Messages.ConversationSender do
         ctx.participants,
         ctx.creds.account,
         edit: ctx.edit_attr,
-        extra_attrs: ctx.stanza_attrs
+        extra_attrs: ctx.stanza_attrs,
+        extra_children: tctoken_children(ctx)
       )
 
     result = Connection.relay_stanza(ctx.cm, stanza)
@@ -690,6 +693,46 @@ defmodule Amarula.Protocol.Messages.ConversationSender do
 
     result
   end
+
+  # True for a plain 1:1 send — not a group, not a peer stanza
+  # (PEER_DATA_OPERATION), which Baileys never attaches/issues a tctoken for
+  # (server rejects 479).
+  defp one_to_one?(ctx), do: ctx.kind == :dm and not peer_send?(ctx)
+
+  # A valid token we hold for the recipient — proof they've trusted us before —
+  # attached so the server doesn't reject this as an untrusted "reach out" (ack
+  # error 463). See `Amarula.Protocol.Signal.TcTokenStore`.
+  defp tctoken_children(ctx) do
+    if one_to_one?(ctx) do
+      case TcTokenStore.valid_token(ctx.conn, ctx.target_jid) do
+        token when is_binary(token) -> [Node.create("tctoken", %{}, token)]
+        nil -> []
+      end
+    else
+      []
+    end
+  end
+
+  # Fire-and-forget, off the send's critical path: ask the server to vouch for
+  # us to the recipient, so a FUTURE send has a token to attach. Skipped for
+  # peer stanzas and protocol messages (receipts/acks aren't a real "reach
+  # out" — mirrors Baileys' isProtocolMsg exclusion in messages-send.ts), and
+  # bucket-deduped via `should_issue_new?/2` so a burst of sends to the same
+  # contact issues at most once per window.
+  defp maybe_issue_tctoken(ctx) do
+    if one_to_one?(ctx) and not protocol_message?(ctx.message) and
+         TcTokenStore.should_issue_new?(ctx.conn, ctx.target_jid) do
+      cm = ctx.cm
+      conn = ctx.conn
+      jid = ctx.target_jid
+      Connection.run_background(cm, fn -> Connection.issue_tctoken(cm, conn, jid) end)
+    end
+
+    :ok
+  end
+
+  defp protocol_message?(%Proto.Message{protocolMessage: pm}), do: not is_nil(pm)
+  defp protocol_message?(_message), do: false
 
   # --- helpers (ported from the former Connection send path) ---
 

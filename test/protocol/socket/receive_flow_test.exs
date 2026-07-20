@@ -131,6 +131,22 @@ defmodule Amarula.Protocol.Socket.ReceiveFlowTest do
 
   defp attr(node, key), do: NodeUtils.get_attr(node, key)
 
+  # A first-ever 1:1 send fires a fire-and-forget tctoken issuance IQ
+  # (xmlns="privacy") shortly after the message frame — irrelevant to these
+  # receive-path flows. Drain it (if/when it shows up) so it doesn't land as
+  # the next unrelated `recv_frame`/`refute_receive`. Best-effort: a timeout
+  # here just means it hasn't landed yet (or was already deduped away).
+  defp drain_tctoken_issuance do
+    receive do
+      {:frame_out, %{tag: "iq"} = iq} ->
+        unless attr(iq, "xmlns") == "privacy" do
+          flunk("unexpected frame while draining tctoken issuance: #{inspect(iq)}")
+        end
+    after
+      200 -> :ok
+    end
+  end
+
   defp with_id(%Node{attrs: attrs} = node, id), do: %{node | attrs: Map.put(attrs, "id", id)}
 
   defp attach_telemetry(events) do
@@ -217,6 +233,12 @@ defmodule Amarula.Protocol.Socket.ReceiveFlowTest do
               |> Enum.map(&NodeUtils.get_attr(&1, "jid"))
 
             inject(ctx, bundle_reply(attr(iq, "id"), requested))
+
+          _other ->
+            # e.g. the fire-and-forget tctoken issuance IQ (xmlns="privacy") a
+            # first-ever 1:1 send fires in the background — irrelevant to these
+            # flows, so just drop it (no reply expected/awaited by the sender).
+            :ok
         end
 
         drain_to_message(ctx)
@@ -233,6 +255,7 @@ defmodule Amarula.Protocol.Socket.ReceiveFlowTest do
     msg_id = message.attrs["id"]
     inject(ctx, Node.create("ack", %{"class" => "message", "id" => msg_id}, nil))
     assert {:ok, ^msg_id} = Task.await(task, 2000)
+    drain_tctoken_issuance()
     msg_id
   end
 
@@ -550,6 +573,7 @@ defmodule Amarula.Protocol.Socket.ReceiveFlowTest do
       assert cached.tag == "message"
       inject(ctx, Node.create("ack", %{"class" => "message", "id" => cached.attrs["id"]}, nil))
       assert {:ok, _} = Task.await(task, 2000)
+      drain_tctoken_issuance()
 
       # A devices notification for the recipient invalidates their cached list.
       node =
