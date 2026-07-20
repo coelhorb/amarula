@@ -5,6 +5,31 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **1:1 sends to a contact the device hasn't exchanged trust with now go through
+  instead of silently failing.** WhatsApp gates a device's first messages to a
+  contact behind a "trusted contact" token exchange (anti-spam); without it the
+  socket accepts the frame but the server rejects it at the application layer
+  with ack error `463` (`MessageAccountRestriction`) — invisible unless the
+  consumer inspects `send_text/3`'s `{:error, {:send_rejected, "463"}}`. Ported
+  the full mechanism from Baileys: attach a held token when we have one for the
+  recipient, fire-and-forget an `issuePrivacyTokens` IQ after each 1:1 send (and
+  on a 463) to earn one for next time, and — the piece that was actually
+  missing end-to-end — handle the inbound `<notification type="privacy_token">`
+  the token itself arrives on (the IQ reply is commonly empty). New
+  `Amarula.Protocol.Signal.TcTokenStore` + `:tctoken` storage namespace.
+- **The pinned WhatsApp Web version was stale**, which can silently break
+  protocol behavior (WhatsApp enforces version checks on multiple endpoints).
+  Rebumped via `scripts/update_wa_version.exs`.
+- **`examples/pair.exs`, `examples/send_message.exs`, and any script built on
+  `examples/connection.ex` were broken on a fresh clone**, raising `Amarula.Supervisor
+  is not running`. The 0.5.0 breaking change (library no longer auto-starts its
+  process tree) was never carried into the example scripts. `Connection.init/1`
+  now starts `Amarula.Supervisor` itself, idempotently.
+
 ## [0.5.3] - 2026-07-25
 
 ### Fixed

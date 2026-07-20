@@ -276,7 +276,25 @@ defmodule Amarula.Protocol.Socket.SendFlowTest do
   defp relay_text(ctx) do
     usync = recv_frame()
     inject(ctx, usync_devices_reply(attr(usync, "id")))
-    drain_until_message(ctx)
+    message = drain_until_message(ctx)
+    drain_tctoken_issuance()
+    message
+  end
+
+  # A first-ever 1:1 send fires a fire-and-forget tctoken issuance IQ
+  # (xmlns="privacy") shortly after the message frame — irrelevant to these
+  # send-path flows. Drain it (if/when it shows up) so it doesn't land as the
+  # next unrelated `recv_frame`/`refute_receive`. Best-effort: a timeout here
+  # just means it hasn't landed yet (or was already deduped away).
+  defp drain_tctoken_issuance do
+    receive do
+      {:frame_out, %{tag: "iq"} = iq} ->
+        unless attr(iq, "xmlns") == "privacy" do
+          flunk("unexpected frame while draining tctoken issuance: #{inspect(iq)}")
+        end
+    after
+      200 -> :ok
+    end
   end
 
   defp recv_frame do
@@ -318,13 +336,22 @@ defmodule Amarula.Protocol.Socket.SendFlowTest do
         message
 
       %{tag: "iq"} = iq ->
-        requested =
-          iq
-          |> NodeUtils.get_binary_node_child("key")
-          |> Map.get(:content)
-          |> Enum.map(&NodeUtils.get_attr(&1, "jid"))
+        case attr(iq, "xmlns") do
+          "privacy" ->
+            # The fire-and-forget tctoken issuance IQ — irrelevant here, no
+            # reply expected/awaited by the sender. Just drop it.
+            :ok
 
-        inject(ctx, bundle_reply(attr(iq, "id"), requested))
+          _encrypt ->
+            requested =
+              iq
+              |> NodeUtils.get_binary_node_child("key")
+              |> Map.get(:content)
+              |> Enum.map(&NodeUtils.get_attr(&1, "jid"))
+
+            inject(ctx, bundle_reply(attr(iq, "id"), requested))
+        end
+
         drain_until_message(ctx)
     end
   end
@@ -605,6 +632,11 @@ defmodule Amarula.Protocol.Socket.SendFlowTest do
           |> Enum.map(&NodeUtils.get_attr(&1, "jid"))
 
         inject(ctx, bundle_reply(attr(iq, "id"), requested))
+
+      "privacy" ->
+        # Fire-and-forget tctoken issuance for one of the other concurrent
+        # recipients' sends — irrelevant here, no reply expected. Drop it.
+        :ok
     end
   end
 
@@ -669,6 +701,7 @@ defmodule Amarula.Protocol.Socket.SendFlowTest do
     bundle1 = recv_frame()
     inject(ctx, bundle_reply(attr(bundle1, "id")))
     _first_msg = recv_frame()
+    drain_tctoken_issuance()
 
     # Second send: USync still runs, but the session now exists so no bundle IQ.
     send_text(ctx, @jid, "second")
@@ -867,6 +900,7 @@ defmodule Amarula.Protocol.Socket.SendFlowTest do
     assert NodeUtils.get_attr(usync_iq, "xmlns") == "usync"
     inject(ctx, usync_reply_with_own(attr(usync_iq, "id"), 1))
     _first = drain_until_message(ctx)
+    drain_tctoken_issuance()
 
     # Second send: devices are cached → no USync; sessions exist → no bundle
     # fetch. First (and only) frame is the message itself.
