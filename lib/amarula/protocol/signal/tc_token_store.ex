@@ -202,20 +202,58 @@ defmodule Amarula.Protocol.Signal.TcTokenStore do
 
   # --- storage (mirrors LidMappingFileStore's read/write pattern) ---
 
-  # WA Web stores tctoken state under the LID identity when one is known,
-  # exactly like Signal sessions (LidMappingFileStore.signal_address/2) —
-  # falls back to the plain (PN) user jid when no LID mapping exists yet.
+  # WA Web stores tctoken state under the account-level LID JID when one is
+  # known, exactly like Signal sessions (LidMappingFileStore.signal_address/2).
+  # Keep the server suffix: notification tokens arrive keyed by `@lid`, and
+  # dropping it here made PN sends look under a different storage key.
   defp storage_jid(conn, jid) do
     user = JID.jid_normalized_user(jid)
 
-    case LidMappingFileStore.lid_for_pn(conn, user) do
-      lid_user when is_binary(lid_user) -> lid_user
-      nil -> user
+    cond do
+      JID.lid_user?(user) ->
+        user
+
+      lid_user = LidMappingFileStore.lid_for_pn(conn, user) ->
+        JID.encode(%{user: lid_user, server: "lid"})
+
+      true ->
+        user
     end
   end
 
   defp read(%Conn{storage: scope, profile: profile}, key),
-    do: Storage.fetch(scope, profile, :tctoken, key)
+    do: read(scope, profile, key)
+
+  defp read(scope, profile, key) do
+    case Storage.fetch(scope, profile, :tctoken, key) do
+      nil ->
+        migrate_legacy_key(scope, profile, key)
+
+      entry ->
+        entry
+    end
+  end
+
+  # Earlier versions resolved PN targets to a bare LID user (for example
+  # `12345`) while notification handling stored the same contact under
+  # `12345@lid`. Preserve any bare-LID entry on upgrade, then copy it to the
+  # canonical JID key so later reads are consistent.
+  defp migrate_legacy_key(scope, profile, key) do
+    case JID.decode(key) do
+      %{user: user, server: "lid"} ->
+        case Storage.fetch(scope, profile, :tctoken, user) do
+          nil ->
+            nil
+
+          entry ->
+            :ok = Storage.put(scope, profile, :tctoken, key, entry)
+            entry
+        end
+
+      _ ->
+        nil
+    end
+  end
 
   defp write(%Conn{storage: scope, profile: profile}, key, value),
     do: Storage.put(scope, profile, :tctoken, key, value)
