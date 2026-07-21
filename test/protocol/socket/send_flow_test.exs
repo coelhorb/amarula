@@ -33,6 +33,7 @@ defmodule Amarula.Protocol.Socket.SendFlowTest do
   alias Amarula.Protocol.Messages.ConversationSender
   alias Amarula.Protocol.Proto
   alias Amarula.Protocol.Signal.{LidMappingFileStore, SessionStore}
+  alias Amarula.Storage
   alias Amarula.Protocol.Socket.ConnectionSupervisor
   alias Amarula.Connection
 
@@ -806,6 +807,32 @@ defmodule Amarula.Protocol.Socket.SendFlowTest do
 
     # PN-initiated send ⇒ wire jid is the PN device jid, not the LID.
     assert NodeUtils.get_attr(to_node, "jid") == @device0_jid
+  end
+
+  test "attaches a LID-keyed trusted-contact token to a PN send", ctx do
+    lid = "20000000001@lid"
+    token = "trusted-contact-token"
+
+    LidMappingFileStore.store_mappings(ctx.conn, [{lid, @jid}])
+
+    :ok =
+      Storage.put(ctx.conn.storage, :test, :tctoken, lid, %{
+        token: token,
+        timestamp: System.system_time(:second)
+      })
+
+    task = send_text(ctx, @jid, "with trusted-contact token")
+    usync_iq = recv_frame()
+    inject(ctx, usync_devices_reply(attr(usync_iq, "id"), lid))
+
+    bundle_iq = recv_frame()
+    inject(ctx, bundle_reply(attr(bundle_iq, "id")))
+    message = recv_frame()
+
+    assert %Node{content: ^token} = NodeUtils.get_binary_node_child(message, "tctoken")
+
+    ack(ctx, message.attrs["id"])
+    assert {:ok, _msg_id} = await_send_result(task)
   end
 
   test "force-refreshes sessions for a newly mapped LID (reason=identity)", ctx do
