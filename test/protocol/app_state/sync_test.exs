@@ -46,29 +46,173 @@ defmodule Amarula.Protocol.AppState.SyncTest do
 
       [%{name: "regular", patches: [decoded_patch]}] = Sync.extract_collections(reply)
 
-      {:ok, changes, new_state} =
+      {:ok, changes, new_state, mismatches} =
         Sync.decode_collection([decoded_patch], Patch.new_state(), gk, "regular")
 
       assert [{:chat, %Amarula.Chat{pinned: true}}] = changes
       assert new_state.version == 1
+      assert mismatches == []
     end
 
-    test "a tampered snapshot MAC is rejected", %{keys: keys, get_key: gk} do
-      patch =
-        pin_patch(keys, 1, "regular")
-        |> Map.put(:snapshotMac, :crypto.strong_rand_bytes(32))
-
-      assert {:error, {:snapshot_mac_mismatch, "regular"}} =
-               Sync.decode_collection([patch], Patch.new_state(), gk, "regular")
-    end
-
-    test "a tampered patch MAC is rejected", %{keys: keys, get_key: gk} do
+    test "a tampered patch MAC drops that patch's mutations but still advances the version", %{
+      keys: keys,
+      get_key: gk
+    } do
       patch =
         pin_patch(keys, 1, "regular")
         |> Map.put(:patchMac, :crypto.strong_rand_bytes(32))
 
-      assert {:error, {:patch_mac_mismatch, "regular"}} =
+      assert {:ok, [], new_state, [{:patch_mac_mismatch, "regular"}]} =
                Sync.decode_collection([patch], Patch.new_state(), gk, "regular")
+
+      # Version still advances — a persistently-mismatching patch must not
+      # fossilize the collection at the old version forever (the original bug:
+      # keeping the old version meant the next resync re-requested the same
+      # version and hit the same mismatch).
+      assert new_state.version == 1
+      # The dropped patch's mutations never touched the hash: a legitimate
+      # follow-up patch chained onto LTHash.zero() (not onto this patch's
+      # value mac) still authenticates.
+      assert new_state.hash == LTHash.zero()
+    end
+
+    test "a tampered snapshot MAC still applies that patch's mutations but stops the batch", %{
+      keys: keys,
+      get_key: gk
+    } do
+      # The patch MAC is itself computed over the (server-supplied) snapshot MAC
+      # bytes, so a real-world scenario where only the snapshot/LTHash bookkeeping
+      # is wrong (not a tampered wire patch) requires patchMac to still verify
+      # against the bad snapshotMac — i.e. the server legitimately signed a
+      # snapshotMac that doesn't match what we compute locally.
+      base = pin_patch(keys, 1, "regular")
+      bad_snapshot_mac = :crypto.strong_rand_bytes(32)
+
+      value_macs =
+        Enum.map(base.mutations, fn %{record: %{value: %{blob: b}}} ->
+          binary_part(b, byte_size(b) - 32, 32)
+        end)
+
+      patch_mac =
+        Mutation.generate_patch_mac(
+          bad_snapshot_mac,
+          value_macs,
+          1,
+          "regular",
+          keys.patch_mac_key
+        )
+
+      patch =
+        base
+        |> Map.put(:snapshotMac, bad_snapshot_mac)
+        |> Map.put(:patchMac, patch_mac)
+
+      assert {:ok, [{:chat, %Amarula.Chat{pinned: true}}], new_state,
+              [{:snapshot_mac_mismatch, "regular"}]} =
+               Sync.decode_collection([patch], Patch.new_state(), gk, "regular")
+
+      # The collection's version still advances — same freeze-prevention as above.
+      assert new_state.version == 1
+    end
+
+    test "a mismatched patch MAC does not derail a clean sibling patch in the same batch", %{
+      keys: keys,
+      get_key: gk
+    } do
+      # First patch (v1) has its patchMac corrupted in transit — its mutations
+      # must be dropped entirely, so the hash the second patch chains onto is
+      # LTHash.zero() (as if the first patch never existed), not a hash that
+      # includes the first patch's (never-applied) mutation.
+      tampered =
+        pin_patch(keys, 1, "regular")
+        |> Map.put(:patchMac, :crypto.strong_rand_bytes(32))
+
+      av = %Proto.SyncActionValue{pinAction: %Proto.SyncActionValue.PinAction{pinned: true}}
+
+      clean =
+        build_patch(
+          ["pin_v1", "5511888888888@s.whatsapp.net"],
+          av,
+          keys,
+          2,
+          "regular",
+          LTHash.zero()
+        )
+
+      {:ok, changes, new_state, mismatches} =
+        Sync.decode_collection([tampered, clean], Patch.new_state(), gk, "regular")
+
+      assert [{:chat, %Amarula.Chat{pinned: true}}] = changes
+      assert new_state.version == 2
+      assert mismatches == [{:patch_mac_mismatch, "regular"}]
+    end
+
+    test "a mismatched snapshot MAC applies its own patch but stops the rest of the batch", %{
+      keys: keys,
+      get_key: gk
+    } do
+      # First patch (v1) is legitimate. Second patch (v2)'s snapshotMac is
+      # corrupted — its own mutations still apply (individually authenticated),
+      # but a third patch (v3) that would have followed must NOT be processed:
+      # its hash chains onto state that's now diverged from the server's.
+      patch_1 = pin_patch(keys, 1, "regular")
+      blob_1 = hd(patch_1.mutations).record.value.blob
+      value_mac_1 = binary_part(blob_1, byte_size(blob_1) - 32, 32)
+      hash_after_1 = LTHash.subtract_then_add(LTHash.zero(), [], [value_mac_1])
+
+      av2 = %Proto.SyncActionValue{pinAction: %Proto.SyncActionValue.PinAction{pinned: false}}
+
+      patch_2_base =
+        build_patch(
+          ["pin_v1", "5511888888888@s.whatsapp.net"],
+          av2,
+          keys,
+          2,
+          "regular",
+          hash_after_1
+        )
+
+      bad_snapshot_mac_2 = :crypto.strong_rand_bytes(32)
+
+      value_macs_2 =
+        Enum.map(patch_2_base.mutations, fn %{record: %{value: %{blob: b}}} ->
+          binary_part(b, byte_size(b) - 32, 32)
+        end)
+
+      patch_mac_2 =
+        Mutation.generate_patch_mac(
+          bad_snapshot_mac_2,
+          value_macs_2,
+          2,
+          "regular",
+          keys.patch_mac_key
+        )
+
+      patch_2 =
+        patch_2_base
+        |> Map.put(:snapshotMac, bad_snapshot_mac_2)
+        |> Map.put(:patchMac, patch_mac_2)
+
+      av3 = %Proto.SyncActionValue{pinAction: %Proto.SyncActionValue.PinAction{pinned: true}}
+
+      patch_3 =
+        build_patch(
+          ["pin_v1", "5511777777777@s.whatsapp.net"],
+          av3,
+          keys,
+          3,
+          "regular",
+          hash_after_1
+        )
+
+      {:ok, changes, new_state, mismatches} =
+        Sync.decode_collection([patch_1, patch_2, patch_3], Patch.new_state(), gk, "regular")
+
+      assert [{:chat, %Amarula.Chat{pinned: true}}, {:chat, %Amarula.Chat{pinned: false}}] =
+               changes
+
+      assert new_state.version == 2
+      assert mismatches == [{:snapshot_mac_mismatch, "regular"}]
     end
 
     test "validate_macs: false skips the collection MACs", %{keys: keys, get_key: gk} do
@@ -77,24 +221,26 @@ defmodule Amarula.Protocol.AppState.SyncTest do
         |> Map.put(:snapshotMac, :crypto.strong_rand_bytes(32))
         |> Map.put(:patchMac, :crypto.strong_rand_bytes(32))
 
-      assert {:ok, [{:chat, %Amarula.Chat{pinned: true}}], _} =
+      assert {:ok, [{:chat, %Amarula.Chat{pinned: true}}], _state, []} =
                Sync.decode_collection([patch], Patch.new_state(), gk, "regular",
                  validate_macs: false
                )
     end
 
-    test "a patch whose key is unavailable decodes to nothing and is not rejected", %{keys: keys} do
+    test "a patch whose key is unavailable decodes to nothing and is not reported", %{
+      keys: keys
+    } do
       # get_key returns nil → every record is skipped, so there are no changes and no
-      # collection MAC to authenticate. Must NOT be treated as a MAC failure.
+      # collection MAC to authenticate. Must NOT be treated as a MAC mismatch.
       patch = pin_patch(keys, 1, "regular")
 
-      assert {:ok, [], _state} =
+      assert {:ok, [], _state, []} =
                Sync.decode_collection([patch], Patch.new_state(), fn _ -> nil end, "regular")
     end
 
     test "an empty patch list yields no changes and the unchanged state", %{get_key: gk} do
       state = Patch.new_state()
-      assert {:ok, [], ^state} = Sync.decode_collection([], state, gk, "regular")
+      assert {:ok, [], ^state, []} = Sync.decode_collection([], state, gk, "regular")
     end
 
     test "a multi-patch collection threads state and validates each patch", %{
@@ -108,10 +254,11 @@ defmodule Amarula.Protocol.AppState.SyncTest do
         build_patch(["pin_v1", "5511999999999@s.whatsapp.net"], av, keys, v, "regular")
       end
 
-      {:ok, changes, new_state} =
+      {:ok, changes, new_state, mismatches} =
         Sync.decode_collection([set.(true, 1), set.(false, 2)], Patch.new_state(), gk, "regular")
 
       assert new_state.version == 2
+      assert mismatches == []
 
       assert [{:chat, %Amarula.Chat{pinned: true}}, {:chat, %Amarula.Chat{pinned: false}}] =
                changes
@@ -124,7 +271,7 @@ defmodule Amarula.Protocol.AppState.SyncTest do
     build_patch(index, av, keys, version, name)
   end
 
-  defp build_patch(index, action_value, keys, version, name) do
+  defp build_patch(index, action_value, keys, version, name, prior_hash \\ nil) do
     index_bytes = Jason.encode!(index)
     action = %Proto.SyncActionData{index: index_bytes, value: action_value, version: 1}
     plaintext = Proto.SyncActionData.encode(action)
@@ -145,9 +292,10 @@ defmodule Amarula.Protocol.AppState.SyncTest do
       keyId: %Proto.KeyId{id: @key_id}
     }
 
-    # The resulting LTHash after this single SET, and the collection MACs the server
-    # signs it with — so the patch authenticates against `keys`.
-    hash = LTHash.subtract_then_add(LTHash.zero(), [], [value_mac])
+    # The resulting LTHash after this SET (chained onto `prior_hash`, default
+    # zero for a patch that's the first in its collection), and the collection
+    # MACs the server signs it with — so the patch authenticates against `keys`.
+    hash = LTHash.subtract_then_add(prior_hash || LTHash.zero(), [], [value_mac])
     snapshot_mac = Mutation.generate_snapshot_mac(hash, version, name, keys.snapshot_mac_key)
 
     patch_mac =

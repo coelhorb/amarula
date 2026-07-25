@@ -4041,17 +4041,20 @@ defmodule Amarula.Connection do
     |> Enum.each(fn %{name: name, patches: patches} ->
       prior = load_collection_state(state, name)
 
-      case Sync.decode_collection(patches, prior, get_key, name) do
-        {:ok, changes, new_state} ->
-          save_collection_state(state, name, new_state)
-          emit_app_state_changes(state, changes)
+      {:ok, changes, new_state, mismatches} =
+        Sync.decode_collection(patches, prior, get_key, name)
 
-        {:error, reason} ->
-          # A patch whose snapshot/patch MAC doesn't match is unauthenticated — drop
-          # it (don't persist the state or emit changes). Prior state is kept, so the
-          # next resync re-requests from the same version.
-          Logger.warning("app-state sync for #{name} rejected (#{inspect(reason)}); not applied")
-      end
+      # See Sync.decode_collection/5 moduledoc for the patch-MAC-vs-snapshot-MAC
+      # handling this reports (ported from Baileys' chat-utils.ts resilience fix,
+      # upstream PR #2456): neither kind aborts the collection outright, so a
+      # single persistently-corrupt record can no longer freeze this collection's
+      # sync at the same version forever.
+      Enum.each(mismatches, fn reason ->
+        Logger.warning("app-state sync for #{name}: #{inspect(reason)}")
+      end)
+
+      save_collection_state(state, name, new_state)
+      emit_app_state_changes(state, changes)
     end)
   end
 
