@@ -70,17 +70,38 @@ defmodule Amarula.Protocol.AppState.Sync do
 
   @doc """
   Decode a collection's patches against `state` with `get_key`, returning
-  `{:ok, changes, new_state}` where `changes` are `SyncAction.decode/1` results
-  (`{:chat, _}` / `{:contact, _}` / …).
+  `{:ok, changes, new_state, mismatches}` — `changes` are `SyncAction.decode/1`
+  results (`{:chat, _}` / `{:contact, _}` / …); `mismatches` is a list of
+  `{:snapshot_mac_mismatch | :patch_mac_mismatch, name}`, one per patch whose
+  aggregate collection MAC didn't verify.
 
   `name` is the collection name — it feeds the snapshot/patch MACs. With
   `validate_macs: true` (default), each patch's **patch MAC** (authenticating the
   patch's mutations) and **snapshot MAC** (authenticating the resulting LTHash) are
-  verified against the app-state-sync key, in addition to the per-record value/index
-  MACs. A patch whose MAC doesn't match is rejected — decoding stops and returns
-  `{:error, {:snapshot_mac_mismatch | :patch_mac_mismatch, name}}` without applying
-  it (the caller should skip the collection and re-sync). A patch whose key isn't
-  available yet decodes to no mutations, so there is nothing to authenticate.
+  checked against the app-state-sync key, in addition to the per-record value/index
+  MACs `Patch.decode_mutations/4` already enforces per record. The two checks are
+  NOT equivalent to a single collection abort — ported exactly from Baileys'
+  resilience fix (`chat-utils.ts` `decodeSyncdPatch` / `decodePatches`, upstream
+  PR #2456), each is handled differently:
+
+  - A **patch MAC** mismatch means the patch's mutations aren't authenticated
+    against this collection at all — they are dropped entirely (never decoded),
+    exactly as `decodeSyncdPatch` throws before calling `decodeSyncdMutations`.
+    The collection version still advances to this patch's version, and decoding
+    continues to the next patch — so a single bad patch can no longer freeze the
+    collection at the same version forever (the original bug this ports away
+    from: the old behavior kept re-requesting the same version, which kept
+    hitting the same mismatch).
+  - A **snapshot MAC** mismatch means the resulting LTHash doesn't match the
+    server's bookkeeping. Since every record's *individual* value/index MAC
+    already authenticated it before this check runs, the patch's own mutations
+    still apply (matching Baileys applying them before its `break`) — but
+    decoding **stops for the rest of this batch**, since subsequent patches'
+    hashes are chained onto a state that's now diverged from the server's; they
+    are picked up on the next resync instead.
+
+  A patch whose key isn't available yet decodes to no mutations, so there is
+  nothing to authenticate (not a mismatch).
   """
   @spec decode_collection(
           [Proto.SyncdPatch.t()],
@@ -88,66 +109,94 @@ defmodule Amarula.Protocol.AppState.Sync do
           (String.t() -> map() | nil),
           String.t(),
           keyword()
-        ) :: {:ok, [SyncAction.result()], Patch.state()} | {:error, term()}
+        ) :: {:ok, [SyncAction.result()], Patch.state(), [{atom(), String.t()}]}
   def decode_collection(patches, state, get_key, name, opts \\ []) do
     validate? = Keyword.get(opts, :validate_macs, true)
 
-    Enum.reduce_while(patches, {:ok, [], state}, fn patch, {:ok, acc, st} ->
-      st = bump(st, patch)
+    {changes, new_state, mismatches} =
+      Enum.reduce_while(patches, {[], state, []}, fn patch, acc ->
+        decode_one_patch(patch, acc, validate?, get_key, name)
+      end)
 
-      {:ok, muts, new_st} =
-        Patch.decode_mutations(patch.mutations, st, get_key, validate_macs: validate?)
-
-      changes = acc ++ Enum.map(muts, &SyncAction.decode/1)
-
-      case verify_patch_macs(validate?, patch, new_st, name, get_key) do
-        :ok -> {:cont, {:ok, changes, new_st}}
-        {:error, _} = err -> {:halt, err}
-      end
-    end)
+    {:ok, changes, new_state, Enum.reverse(mismatches)}
   end
 
   # --- internals ---
 
-  # Verify the collection-level MACs the server signs each patch with. The patch MAC
-  # covers the patch's value MACs; the snapshot MAC covers the resulting LTHash — so
-  # together they authenticate both the mutations and the state they produce. Both
-  # use sub-keys expanded from the patch's app-state-sync key (the same key the
-  # records use), so a patch whose key we don't have yet decoded to nothing and needs
-  # no check.
-  defp verify_patch_macs(false, _patch, _st, _name, _get_key), do: :ok
+  # One reduce_while step: bump the version, then patchMac ⇒ snapshotMac. See the
+  # decode_collection/5 moduledoc for what each branch means.
+  defp decode_one_patch(patch, {acc, st, mismatches}, validate?, get_key, name) do
+    st = bump(st, patch)
 
-  defp verify_patch_macs(true, patch, st, name, get_key) do
+    case verify_patch_mac(validate?, patch, st, name, get_key) do
+      :ok ->
+        {:ok, muts, new_st} =
+          Patch.decode_mutations(patch.mutations, st, get_key, validate_macs: validate?)
+
+        changes = acc ++ Enum.map(muts, &SyncAction.decode/1)
+        continue_after_decode(patch, changes, new_st, mismatches, validate?, get_key, name)
+
+      {:error, reason} ->
+        {:cont, {acc, st, [reason | mismatches]}}
+    end
+  end
+
+  defp continue_after_decode(patch, changes, new_st, mismatches, validate?, get_key, name) do
+    case verify_snapshot_mac(validate?, patch, new_st, name, get_key) do
+      :ok -> {:cont, {changes, new_st, mismatches}}
+      {:error, reason} -> {:halt, {changes, new_st, [reason | mismatches]}}
+    end
+  end
+
+  # The patch MAC covers the patch's OWN value MACs (as sent by the server, off
+  # `patch.mutations` — not yet decoded), authenticating that this exact set of
+  # mutations was issued by the key holder for this collection/version. Checked
+  # BEFORE decoding, matching decodeSyncdPatch: a mismatch here means the patch's
+  # mutations are never decoded at all.
+  defp verify_patch_mac(false, _patch, _st, _name, _get_key), do: :ok
+
+  defp verify_patch_mac(true, patch, st, name, get_key) do
     case patch_key(patch, get_key) do
       nil ->
         :ok
 
       key ->
         value_macs = Enum.map(patch.mutations, &value_mac/1)
-        version = st.version
-
-        snapshot_mac =
-          Mutation.generate_snapshot_mac(st.hash, version, name, key.snapshot_mac_key)
 
         patch_mac =
           Mutation.generate_patch_mac(
             patch.snapshotMac,
             value_macs,
-            version,
+            st.version,
             name,
             key.patch_mac_key
           )
 
-        cond do
-          not mac_equal?(snapshot_mac, patch.snapshotMac) ->
-            {:error, {:snapshot_mac_mismatch, name}}
+        if mac_equal?(patch_mac, patch.patchMac),
+          do: :ok,
+          else: {:error, {:patch_mac_mismatch, name}}
+    end
+  end
 
-          not mac_equal?(patch_mac, patch.patchMac) ->
-            {:error, {:patch_mac_mismatch, name}}
+  # The snapshot MAC covers the resulting LTHash after this patch's mutations are
+  # applied — checked AFTER decoding, against the post-decode state. A mismatch
+  # doesn't undo the mutations that already applied (matching decodePatches
+  # logging + breaking rather than throwing), but the caller must stop decoding
+  # further patches in this batch since their chained hashes are now unreliable.
+  defp verify_snapshot_mac(false, _patch, _st, _name, _get_key), do: :ok
 
-          true ->
-            :ok
-        end
+  defp verify_snapshot_mac(true, patch, st, name, get_key) do
+    case patch_key(patch, get_key) do
+      nil ->
+        :ok
+
+      key ->
+        snapshot_mac =
+          Mutation.generate_snapshot_mac(st.hash, st.version, name, key.snapshot_mac_key)
+
+        if mac_equal?(snapshot_mac, patch.snapshotMac),
+          do: :ok,
+          else: {:error, {:snapshot_mac_mismatch, name}}
     end
   end
 

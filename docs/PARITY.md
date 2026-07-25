@@ -107,3 +107,31 @@ Audited the rc12→rc13 diff and the notable open Baileys issues/PRs against Ama
   analog.
 - **#2640** LIDMappingStore unbounded cache — Amarula's LID/device stores are
   file-backed with lazy TTL, no in-memory map or per-entry timers.
+
+## Upstream review — 2026-07-24: app-state MAC-mismatch resilience
+
+Prompted by a reliability bug report (`Sync.decode_collection/5` aborting a
+whole collection's sync — chats/contacts/mute/pin/archive — on one patch's
+aggregate MAC mismatch, permanently freezing that collection at the same
+version on every resync retry) and a since-reverted first attempt (PR #37) that
+fixed the freeze but went further than Baileys' own fix, applying
+unauthenticated mutations and continuing past mismatches mid-batch.
+
+**Ported, matching Baileys exactly (`chat-utils.ts`
+`decodeSyncdPatch`/`decodePatches`, upstream Baileys PR #2456 "App state sync
+resilience — skip undecryptable records instead of aborting", built on #2350):**
+
+- **Patch MAC mismatch** → that patch's mutations are unauthenticated against
+  this collection/version and are dropped entirely (mirrors
+  `decodeSyncdPatch` throwing *before* `decodeSyncdMutations` is called); the
+  collection version still advances to this patch's version so the freeze
+  can't recur, and decoding continues to the next patch in the batch (mirrors
+  `decodePatches`' catch + `continue`).
+- **Snapshot MAC mismatch** → this patch's own mutations already passed
+  per-record value/index MAC checks, so they still apply (mirrors
+  `decodePatches` applying `decodeResult` before the snapshot check runs), but
+  decoding stops for the rest of the batch since later patches' MACs chain
+  onto a now-diverged local hash (mirrors `decodePatches`' `break`); the
+  remaining patches are picked up on the next resync.
+- Both kinds are surfaced via a `mismatches` return element (logged by
+  `Connection.apply_app_state_reply/2`), never silently swallowed.

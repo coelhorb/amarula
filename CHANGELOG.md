@@ -5,6 +5,29 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A single corrupt or stale app-state patch no longer permanently freezes
+  that collection's sync**, without weakening MAC authentication.
+  `Sync.decode_collection/5` used to abort an entire collection
+  (chats/contacts/mute/pin/archive) the moment any patch's aggregate
+  snapshot/patch MAC failed to verify — discarding every patch decoded in that
+  batch and keeping the collection's old local version, so the next resync
+  re-requested the same version and hit the same mismatch again, freezing
+  updates for good if the cause didn't self-resolve. Decoding now matches
+  WhatsApp Web's own resilience fix exactly (`chat-utils.ts`
+  `decodeSyncdPatch`/`decodePatches`, upstream Baileys PR #2456): a **patch
+  MAC** mismatch means that patch's mutations are unauthenticated and are
+  dropped entirely (never decoded), but the collection version still advances
+  so the freeze can't recur; a **snapshot MAC** mismatch means the patch's own
+  (individually-authenticated) mutations still apply, but decoding stops for
+  the rest of that batch since later patches' MACs are chained onto a
+  now-diverged local hash — they're picked up on the next resync instead. Both
+  cases are reported via a `mismatches` list (logged by
+  `Connection.apply_app_state_reply/2`), never silently swallowed.
+
 ## [0.5.2] - 2026-07-21
 
 ### Fixed
