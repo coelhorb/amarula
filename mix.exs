@@ -81,6 +81,7 @@ defmodule Amarula.MixProject do
         "docs/LID_PN.md",
         "docs/GOING_PROD.md",
         "docs/PARITY.md",
+        "docs/PITFALLS.md",
         "CHANGELOG.md",
         "LICENSE",
         "NOTICE"
