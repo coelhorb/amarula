@@ -75,6 +75,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (including that the proto-cased spellings are refused), `send_call_timeout_ms`,
   `req_options`, and the three connect-time sync flags.
 
+### Added (fork-only)
+
+- **`mix ci` — the full gate in one command**: `format`,
+  `compile --warnings-as-errors`, `format --check-formatted`, `test`,
+  `credo --strict --mute-exit-status` and `dialyzer`. Mirrors what the GitHub
+  workflow enforces and adds Dialyzer, which now reports zero. Credo stays
+  informational until the existing backlog is cleared. `mix check` is unchanged
+  as the quick format+test loop.
+
 ## [0.5.6] - 2026-08-01
 
 > **Media sends were broken in every release up to 0.5.5** — if you send media,
