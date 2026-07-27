@@ -105,6 +105,13 @@ defmodule Amarula.Examples.Connection do
     config = config(opts)
     profile = config.profile
 
+    # Amarula no longer auto-starts its shared tree (0.5.0+) — a real app adds
+    # `Amarula.Supervisor` once, itself, before any connection. These example
+    # scripts have no such app, so start it here, idempotently (a second/third
+    # Connection in the same `iex -S mix` session hits :already_started, which is
+    # fine — the tree is already up).
+    ensure_supervisor_started()
+
     # parent_pid: self() routes every {:amarula, _, _} event to handle_info/2.
     # Attach any plugins (Req-style) before connecting; a plugin's opts get this
     # GenServer pid as :server so it can respond through us.
@@ -301,6 +308,13 @@ defmodule Amarula.Examples.Connection do
   # real app names a :profile and does nothing else about creds.
   defp config(opts) do
     %{profile: Keyword.get(opts, :profile, :default)}
+  end
+
+  defp ensure_supervisor_started do
+    case Amarula.Supervisor.start_link() do
+      {:ok, _pid} -> :ok
+      {:error, {:already_started, _pid}} -> :ok
+    end
   end
 
   # Decrypt + tally a poll vote for the poll we created (demo of PollCrypto/Poll).
