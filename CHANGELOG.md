@@ -5,6 +5,59 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **1:1 sends to a contact the device hasn't exchanged trust with now go through
+  instead of silently failing.** WhatsApp gates a device's first messages to a
+  contact behind a "trusted contact" token exchange (anti-spam); without it the
+  socket accepts the frame but the server rejects it at the application layer
+  with ack error `463` (`MessageAccountRestriction`) — invisible unless the
+  consumer inspects `send_text/3`'s `{:error, {:send_rejected, "463"}}`. Ported
+  the full mechanism from Baileys: attach a held token when we have one for the
+  recipient, fire-and-forget an `issuePrivacyTokens` IQ after each 1:1 send (and
+  again on a 463) to earn one for next time, and — the piece that was actually
+  missing end-to-end — handle the inbound `<notification type="privacy_token">`
+  the token itself arrives on, since the issuance IQ's own reply is commonly
+  empty. A 463 never resends the rejected message: per Baileys' `handleBadAck`,
+  a resend counts as another "reach out" and worsens the restriction. New
+  `Amarula.Protocol.Signal.TcTokenStore` and `:tctoken` storage namespace.
+
+- **The example scripts work again on a fresh clone.** `examples/pair.exs`,
+  `examples/send_message.exs` and anything built on `examples/connection.ex`
+  raised `Amarula.Supervisor is not running`: the 0.5.0 breaking change (the
+  library stopped auto-starting its process tree) was never carried into the
+  examples, which have no host application to add the supervisor for them.
+  `Connection.init/1` now starts it itself, idempotently.
+
+### Changed
+
+- **Bumped the pinned WhatsApp Web version to `2.3000.1043444590`.** The pinned
+  value must track a version WhatsApp still accepts; a stale one silently breaks
+  new-device pairing (the QR/pairing code generates, but the phone reports
+  "Couldn't link device") and can change protocol behaviour on endpoints that
+  enforce version checks. Refreshed via `scripts/update_wa_version.exs`.
+
+### Security
+
+- **Raised the `protobuf` requirement to `~> 0.17`.** The whole `~> 0.15.0` range is
+  affected by GHSA-rv48-qqj5-crxg (CVE-2026-54451, HIGH): the decoder placed no
+  recursion limit on embedded messages, so a small deeply-nested payload triggers
+  memory exhaustion. Affected 0.8.0 through 0.16.0; fixed in 0.16.1, which caps
+  nesting at 100 levels. This matters here because `protobuf` is the library that
+  decodes WhatsApp traffic — untrusted input straight off the network.
+
+  No code change needed: Amarula only uses the generated API (`Proto.X.decode/1`) and
+  never calls `Protobuf.Decoder`/`Encoder`/`DSL` directly. The `wa_proto.pb.ex`
+  generated with protoc-gen-elixir 0.15 stays valid — 0.17's `use Protobuf` neither
+  validates nor version-gates its options, and the three the generated file passes
+  (`:syntax`, `:enum`, `:map`) are still documented. protobuf 0.16.1 itself ships
+  files generated with 0.15.0.
+
+  0.17 over 0.16.1 buys one more thing: it fixes the Elixir 1.19/1.20 warnings, so
+  `Protobuf.DSL.cal_packed/2` no longer emits a type warning on every compile.
+
 ## [0.5.3] - 2026-07-25
 
 ### Fixed
