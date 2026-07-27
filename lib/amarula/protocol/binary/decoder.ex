@@ -333,17 +333,19 @@ defmodule Amarula.Protocol.Binary.Decoder do
   end
 
   @spec unpack_nibble(:hex | :nibble, non_neg_integer()) :: non_neg_integer()
+  # `value` is a nibble the caller masked out of a byte, so it is already
+  # non-negative (as the spec says) — a `value >= 0` test here is always true.
   defp unpack_nibble(:hex, value) do
     cond do
-      value >= 0 and value < 10 -> ?0 + value
-      value >= 10 and value < 16 -> ?A + value - 10
+      value < 10 -> ?0 + value
+      value < 16 -> ?A + value - 10
       true -> raise "invalid hex nibble: #{value}"
     end
   end
 
   defp unpack_nibble(:nibble, value) do
     cond do
-      value >= 0 and value <= 9 -> ?0 + value
+      value <= 9 -> ?0 + value
       value == 10 -> ?-
       value == 11 -> ?.
       # null terminator

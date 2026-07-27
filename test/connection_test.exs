@@ -392,6 +392,23 @@ defmodule Amarula.ConnectionTest do
       assert Router.route(node) == :stream_error
     end
 
+    test "a childless stream:error reports reason \"unknown\", not an empty string", %{
+      config: config
+    } do
+      {:ok, pid} = Connection.start_link(config, parent_pid: self())
+
+      # get_first_child_tag/1 returns "" for a node with no children, so the
+      # "unknown" fallback has to test the empty string — a `|| "unknown"` never
+      # fires and the reason reaches last_error (and the log) blank.
+      send(
+        pid,
+        {:inject_node, %Node{tag: "stream:error", attrs: %{"code" => "503"}, content: nil}}
+      )
+
+      assert_receive {:amarula, :connection_update, %{connection: :disconnected}}, 1000
+      assert :sys.get_state(pid).last_error == {:stream_error, 503, "unknown"}
+    end
+
     test "a reconnect keeps the same Connection pid and swaps the websocket", %{config: config} do
       # A local listener that accepts TCP but never answers the WS upgrade: the
       # replacement WebSockex stays alive mid-handshake, so the swap is observable.
