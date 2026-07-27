@@ -25,7 +25,7 @@ defmodule Amarula.Protocol.Socket.ReceiveFlowTest do
   alias Amarula.Protocol.Crypto.Crypto
   alias Amarula.Protocol.Messages.{EditCrypto, Media, MessageEncoder}
   alias Amarula.Protocol.Proto
-  alias Amarula.Protocol.Signal.{LidMappingFileStore, SessionStore}
+  alias Amarula.Protocol.Signal.{LidMappingFileStore, SessionStore, TcTokenStore}
   alias Amarula.Protocol.Socket.ConnectionSupervisor
   alias Amarula.Connection
 
@@ -131,6 +131,22 @@ defmodule Amarula.Protocol.Socket.ReceiveFlowTest do
 
   defp attr(node, key), do: NodeUtils.get_attr(node, key)
 
+  # A first-ever 1:1 send fires a fire-and-forget tctoken issuance IQ
+  # (xmlns="privacy") shortly after the message frame — irrelevant to these
+  # receive-path flows. Drain it (if/when it shows up) so it doesn't land as
+  # the next unrelated `recv_frame`/`refute_receive`. Best-effort: a timeout
+  # here just means it hasn't landed yet (or was already deduped away).
+  defp drain_tctoken_issuance do
+    receive do
+      {:frame_out, %{tag: "iq"} = iq} ->
+        unless attr(iq, "xmlns") == "privacy" do
+          flunk("unexpected frame while draining tctoken issuance: #{inspect(iq)}")
+        end
+    after
+      200 -> :ok
+    end
+  end
+
   defp with_id(%Node{attrs: attrs} = node, id), do: %{node | attrs: Map.put(attrs, "id", id)}
 
   defp attach_telemetry(events) do
@@ -217,6 +233,12 @@ defmodule Amarula.Protocol.Socket.ReceiveFlowTest do
               |> Enum.map(&NodeUtils.get_attr(&1, "jid"))
 
             inject(ctx, bundle_reply(attr(iq, "id"), requested))
+
+          _other ->
+            # e.g. the fire-and-forget tctoken issuance IQ (xmlns="privacy") a
+            # first-ever 1:1 send fires in the background — irrelevant to these
+            # flows, so just drop it (no reply expected/awaited by the sender).
+            :ok
         end
 
         drain_to_message(ctx)
@@ -233,6 +255,7 @@ defmodule Amarula.Protocol.Socket.ReceiveFlowTest do
     msg_id = message.attrs["id"]
     inject(ctx, Node.create("ack", %{"class" => "message", "id" => msg_id}, nil))
     assert {:ok, ^msg_id} = Task.await(task, 2000)
+    drain_tctoken_issuance()
     msg_id
   end
 
@@ -468,6 +491,50 @@ defmodule Amarula.Protocol.Socket.ReceiveFlowTest do
       assert Process.alive?(ctx.pid)
     end
 
+    test "privacy_token: stores the peer's token under sender_lid, not from", ctx do
+      lid = "20000000001@lid"
+      token = "peer-trusted-contact-token"
+      ts = System.system_time(:second)
+
+      # This is the channel a peer's token for us actually arrives on — the
+      # issuance IQ's own reply is commonly empty. The token node's `jid` attr
+      # here is OUR device jid, so it must be ignored in favour of the sender
+      # resolved from the notification (Baileys handlePrivacyTokenNotification).
+      node =
+        Node.create(
+          "notification",
+          %{"type" => "privacy_token", "from" => @jid, "sender_lid" => lid, "id" => "N-TC"},
+          [
+            Node.create("tokens", %{}, [
+              Node.create(
+                "token",
+                %{
+                  "jid" => @me_jid,
+                  "t" => Integer.to_string(ts),
+                  "type" => "trusted_contact"
+                },
+                token
+              )
+            ])
+          ]
+        )
+
+      inject(ctx, node)
+
+      ack = recv_frame()
+      assert ack.tag == "ack"
+      assert attr(ack, "type") == "privacy_token"
+
+      # handle_notification/2 acks *before* dispatching, so the ack frame above
+      # doesn't mean the token was stored yet. A sync call serializes behind the
+      # notification's own handling.
+      _ = :sys.get_state(ctx.pid)
+
+      # Stored under the sender's LID — so a later 1:1 send to that contact
+      # finds it. Keyed by `from` (or by our own jid) it would never be found.
+      assert TcTokenStore.valid_token(ctx.conn, lid) == token
+    end
+
     test "encrypt from the server with a low count: uploads fresh prekeys", ctx do
       node =
         Node.create("notification", %{"type" => "encrypt", "from" => @server, "id" => "N2"}, [
@@ -550,6 +617,7 @@ defmodule Amarula.Protocol.Socket.ReceiveFlowTest do
       assert cached.tag == "message"
       inject(ctx, Node.create("ack", %{"class" => "message", "id" => cached.attrs["id"]}, nil))
       assert {:ok, _} = Task.await(task, 2000)
+      drain_tctoken_issuance()
 
       # A devices notification for the recipient invalidates their cached list.
       node =

@@ -67,7 +67,7 @@ defmodule Amarula.Connection do
   alias Amarula.Protocol.Proto
 
   alias Amarula.Protocol.Signal.{PreKeys, SessionCustodian, SessionInjector, SessionStore}
-  alias Amarula.Protocol.Signal.{DeviceListCache, LidMappingFileStore}
+  alias Amarula.Protocol.Signal.{DeviceListCache, LidMappingFileStore, TcTokenStore}
   alias Amarula.Protocol.Messages.Receipt
   alias Amarula.Protocol.Groups.Notification, as: GroupNotification
   alias Amarula.Connection.{SendOps, GroupOps, PreKeyOps, Pairing, Notifications, Receive}
@@ -407,6 +407,42 @@ defmodule Amarula.Connection do
           :ok | {:error, :not_connected}
   def relay_stanza(pid, node) do
     GenServer.call(pid, {:relay_stanza, node})
+  end
+
+  # Run `fun` (arity 0) as a supervised, fire-and-forget task under this
+  # connection's `Task.Supervisor` — for best-effort background work a caller
+  # (e.g. `ConversationSender`) doesn't hold a `task_supervisor` pid for itself.
+  # No result is returned to the caller; a raise is contained by the supervisor.
+  # Internal: not part of the consumer API.
+  @doc false
+  @spec run_background(GenServer.server(), (-> any())) :: :ok
+  def run_background(pid, fun) when is_function(fun, 0) do
+    GenServer.cast(pid, {:run_background, fun})
+  end
+
+  # Fire an `issuePrivacyTokens` IQ for `jid` and store whatever trusted-contact
+  # token(s) come back (`TcTokenStore`), so a *future* 1:1 send to `jid` has one
+  # to attach. Best-effort and fire-and-forget by design: an IQ failure is logged
+  # and swallowed here — this never blocks or retries the message that triggered
+  # it (see `TcTokenStore` moduledoc and the 463 handling in `handle_message_ack/2`).
+  # Internal: not part of the consumer API.
+  @doc false
+  @spec issue_tctoken(GenServer.server(), Amarula.Conn.t(), String.t()) :: :ok
+  def issue_tctoken(pid, conn, jid) do
+    ts = System.system_time(:second)
+    iq = TcTokenStore.build_issue_iq(jid, ts)
+
+    result_node =
+      case query_iq(pid, iq) do
+        {:ok, node} ->
+          node
+
+        {:error, reason} ->
+          Logger.debug("tctoken issuance for #{jid} failed: #{inspect(reason)}")
+          nil
+      end
+
+    TcTokenStore.store_result(conn, result_node, jid, ts)
   end
 
   @doc "Cast a request to force-refresh sessions for newly mapped LIDs."
@@ -961,6 +997,14 @@ defmodule Amarula.Connection do
   def handle_cast({:assert_lid_sessions, lids}, state) do
     Logger.debug("Force-refreshing sessions for #{length(lids)} newly mapped LID(s)")
     {:noreply, force_refresh_sessions(state, lids)}
+  end
+
+  # A caller with no `task_supervisor` of its own (e.g. ConversationSender)
+  # asking us to run best-effort background work under ours.
+  @impl GenServer
+  def handle_cast({:run_background, fun}, state) do
+    Task.Supervisor.start_child(state.task_supervisor, fun)
+    {:noreply, state}
   end
 
   @impl GenServer
@@ -1967,9 +2011,30 @@ defmodule Amarula.Connection do
 
       {:error, {:send_rejected, code}} = err ->
         emit_ack_outcome(state, msg_id, :rejected, code)
+        maybe_recover_tctoken(state, node, code)
         resolve_ack(state, msg_id, fn _on_ack -> err end)
     end
   end
+
+  # 463 = MessageAccountRestriction: the recipient hasn't trusted us yet (no
+  # tctoken on file for them) — the message above was NOT delivered. Fire off a
+  # best-effort issuance so a FUTURE send to them may succeed; never retry the
+  # message itself (Baileys' handleBadAck: retrying counts as another "reach
+  # out" and worsens the restriction). See `TcTokenStore` moduledoc.
+  defp maybe_recover_tctoken(state, node, "463") do
+    case NodeUtils.get_attr(node, "from") do
+      jid when is_binary(jid) ->
+        pid = self()
+        conn = state.conn
+
+        Task.Supervisor.start_child(state.task_supervisor, fn -> issue_tctoken(pid, conn, jid) end)
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp maybe_recover_tctoken(_state, _node, _code), do: :ok
 
   # Telemetry for the outcome of a tracked send AFTER relay — the send span
   # closes at relay time, so the server's verdict needs its own event. Gated on
@@ -2308,6 +2373,29 @@ defmodule Amarula.Connection do
   # the waiting retry_media/2 caller with {:ok, new_direct_path} or an error.
   defp dispatch_notification(state, "mediaretry", node) do
     handle_media_retry_notification(state, node)
+  end
+
+  # privacy_token — a peer's trusted-contact token for us, pushed unsolicited
+  # (Baileys handlePrivacyTokenNotification). This is the actual channel new
+  # tokens arrive on; our own issuePrivacyTokens IQ reply is commonly empty.
+  # Without this, a freshly-linked device can never accumulate tokens and 1:1
+  # sends to new contacts keep hitting ack error 463. `sender_lid` (when it's
+  # actually a LID) takes precedence over `from` — a token node's own `jid`
+  # attr here is *our* device jid, not the sender's, so TcTokenStore ignores it
+  # in favor of this resolved fallback (see TcTokenStore.store_notification/3).
+  defp dispatch_notification(state, "privacy_token", node) do
+    from = NodeUtils.get_attr(node, "from")
+    sender_lid = NodeUtils.get_attr(node, "sender_lid")
+
+    fallback_jid =
+      if is_binary(sender_lid) and JID.lid_user?(sender_lid), do: sender_lid, else: from
+
+    if is_binary(fallback_jid) do
+      Logger.debug("privacy_token notification from #{fallback_jid}")
+      TcTokenStore.store_notification(conn(state), node, fallback_jid)
+    end
+
+    state
   end
 
   defp dispatch_notification(state, type, _node) do

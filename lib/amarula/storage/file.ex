@@ -34,7 +34,8 @@ defmodule Amarula.Storage.File do
     lid_mapping: "lidmap-",
     device_list: "devices-",
     app_state_sync_key: "appkey-",
-    app_state_version: "appver-"
+    app_state_version: "appver-",
+    tctoken: "tctoken-"
   }
 
   @impl true

@@ -77,7 +77,13 @@ defmodule Amarula.Protocol.Messages.Relay do
     participants_node =
       Node.create("participants", %{}, Enum.map(participants, &participant_to_node/1))
 
-    children = [participants_node] ++ maybe_device_identity(any_pkmsg?(participants), account)
+    # `:extra_children` (e.g. a `<tctoken>` for a 1:1 send — see
+    # `Amarula.Protocol.Signal.TcTokenStore`) appends after device-identity,
+    # matching where Baileys pushes it in the stanza content array.
+    children =
+      [participants_node] ++
+        maybe_device_identity(any_pkmsg?(participants), account) ++
+        Keyword.get(opts, :extra_children, [])
 
     # Attrs match a live Baileys 1:1 send (captured 2026-06-13): id, to (PN), type
     # ONLY — NO `t`. The `edit` attr is added only for delete/edit messages.
