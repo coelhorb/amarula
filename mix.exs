@@ -22,7 +22,10 @@ defmodule Amarula.MixProject do
         "An independent, OTP-native WhatsApp Web client for Elixir — Noise handshake, Signal end-to-end encryption, multi-device.",
       package: package(),
       docs: docs(),
-      test_coverage: test_coverage()
+      test_coverage: test_coverage(),
+      # :mix is needed for the Mix.Task behaviour and Mix.raise/1 used by
+      # lib/mix/tasks/ — without it Dialyzer reports them as unknown.
+      dialyzer: [plt_add_apps: [:mix]]
     ]
   end
 
@@ -164,15 +167,28 @@ defmodule Amarula.MixProject do
       String.starts_with?(ref, "Amarula.Connection.")
   end
 
-  # `mix check` runs the test suite, so default it to the :test env.
+  # `mix check` and `mix ci` both run the test suite, so default them to :test —
+  # otherwise Mix refuses the nested test run.
   def cli do
-    [preferred_envs: [check: :test]]
+    [preferred_envs: [check: :test, ci: :test]]
   end
 
   # `mix check` — format the code and run the test suite. Run before committing.
   defp aliases do
     [
-      check: ["format", "test"]
+      check: ["format", "test"],
+      # The full gate, matching what .github/workflows/elixir.yml enforces plus
+      # Dialyzer. `format` rewrites first so `--check-formatted` only fails when
+      # something is genuinely unformattable. Credo is informational until the
+      # existing backlog is cleared — same call the workflow makes.
+      ci: [
+        "format",
+        "compile --warnings-as-errors",
+        "format --check-formatted",
+        "test",
+        "credo --strict --mute-exit-status",
+        "dialyzer"
+      ]
     ]
   end
 
@@ -252,7 +268,9 @@ defmodule Amarula.MixProject do
 
       # Development dependencies
       {:ex_doc, "~> 0.31", only: :dev, runtime: false},
-      {:dialyxir, "~> 1.4", only: [:dev], runtime: false},
+      # Also in :test so the `ci` alias — which runs in :test for `mix test` —
+      # can reach `mix dialyzer`.
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
 
       # Testing dependencies
