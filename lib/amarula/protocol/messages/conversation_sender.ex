@@ -445,12 +445,14 @@ defmodule Amarula.Protocol.Messages.ConversationSender do
       store_participant_lid_mappings(ctx, meta)
       users = Enum.uniq(participant_user_jids(meta) ++ own_id_list(ctx))
 
-      # user_devices already returns {:error, {stage, reason}} on failure.
+      # user_devices already returns {:error, {stage, reason}} on failure, and
+      # this inner `with` is in the body — its value goes straight back to the
+      # caller without passing through the `else` below.
       with {:ok, devices} <- user_devices(ctx, users) do
         {:ok, devices, meta.addressing_mode}
       end
     else
-      {:error, {_stage, _reason}} = err -> err
+      # So only query_iq/parse failures land here.
       error -> {:error, {:group_metadata, error}}
     end
   end

@@ -1048,21 +1048,18 @@ defmodule Amarula.Connection do
     Logger.debug("WebSocket connected - initiating handshake")
 
     # Build the ClientHello (pure) then send it + transition (CM owns the socket).
-    case Login.client_hello(state.auth_creds, state.config) do
-      {:ok, frame, handshake_state} ->
-        case WebSocketClient.send_data(state.websocket_client, frame) do
-          :ok ->
-            Logger.debug("ClientHello sent (#{byte_size(frame)} bytes)")
-            emit_connection_update(state, :connecting)
-            {:noreply, %{state | handshake_state: handshake_state}}
+    # `client_hello/2` is pure key generation and always succeeds, so only the
+    # send can fail here.
+    {:ok, frame, handshake_state} = Login.client_hello(state.auth_creds, state.config)
 
-          {:error, reason} ->
-            Logger.error("Failed to send ClientHello: #{inspect(reason)}")
-            {:noreply, handle_connection_error(state, reason)}
-        end
+    case WebSocketClient.send_data(state.websocket_client, frame) do
+      :ok ->
+        Logger.debug("ClientHello sent (#{byte_size(frame)} bytes)")
+        emit_connection_update(state, :connecting)
+        {:noreply, %{state | handshake_state: handshake_state}}
 
       {:error, reason} ->
-        Logger.error("Failed to generate ClientHello: #{inspect(reason)}")
+        Logger.error("Failed to send ClientHello: #{inspect(reason)}")
         {:noreply, handle_connection_error(state, reason)}
     end
   end
@@ -2825,7 +2822,14 @@ defmodule Amarula.Connection do
 
   # Mirrors Baileys getErrorCodeFromStreamError: code attr, reason = first child tag
   defp stream_error_details(node) do
-    reason = NodeUtils.get_first_child_tag(node) || "unknown"
+    # get_first_child_tag/1 returns "" (never nil) for a childless node, so the
+    # "unknown" fallback has to test for the empty string — `|| "unknown"` never
+    # fired, and a childless stream error surfaced as an empty reason.
+    reason =
+      case NodeUtils.get_first_child_tag(node) do
+        "" -> "unknown"
+        tag -> tag
+      end
 
     code =
       case Integer.parse(NodeUtils.get_attr(node, "code") || "") do

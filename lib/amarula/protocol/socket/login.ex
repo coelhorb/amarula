@@ -83,10 +83,11 @@ defmodule Amarula.Protocol.Socket.Login do
   # --- internals ---
 
   defp decode_first_frame(handshake_state, data) do
+    # decode_frame/2 only ever returns {:ok, frames, noise} (single return
+    # point, and its spec says so), so these two clauses are total.
     case NoiseHandler.decode_frame(handshake_state.noise_state, data) do
       {:ok, [frame | _], _noise} -> {:ok, frame}
       {:ok, [], _noise} -> {:error, :no_handshake_frame}
-      other -> other
     end
   end
 end
