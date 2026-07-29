@@ -626,6 +626,117 @@ defmodule Amarula.ConnectionTest do
     end
   end
 
+  describe "build_msg/6 — channel is account-level, from keeps the device (#41)" do
+    alias Amarula.{Address, Msg}
+    alias Amarula.Protocol.Proto
+
+    @me_pn "5511999999999@s.whatsapp.net"
+    @other "5511888888888@s.whatsapp.net"
+    # The peer wrote from a LINKED device (WhatsApp Web/desktop), so the stanza
+    # `from` carries `:29`. Signal sessions are per-device, so the wire genuinely
+    # carries this — it is not a synthetic case.
+    @other_dev "5511888888888:29@s.whatsapp.net"
+    @state %{auth_creds: %{me: %{id: @me_pn}}}
+    @own Address.parse(@me_pn)
+
+    defp dev_node(attrs), do: %Node{tag: "message", attrs: attrs, content: nil}
+
+    test "a DM from a peer's linked device strips the device from channel, keeps it on from" do
+      # The regression: with no `participant`, a DM's room IS the stanza `from`, so
+      # `channel` inherited the sending device. Replying to it got `<ack error=400>`.
+      node = dev_node(%{"from" => @other_dev, "id" => "D1"})
+
+      msg =
+        Connection.build_msg(
+          @state,
+          %Proto.Message{conversation: "ping"},
+          node,
+          @other_dev,
+          "D1",
+          @own
+        )
+
+      refute msg.from_me
+      # The reply handle must name the account, never one device.
+      assert %Address{user: "5511888888888", kind: :pn, device: nil} = msg.channel
+      # The writer identity keeps it — consumers rely on this to spot their own device.
+      assert %Address{user: "5511888888888", device: 29} = msg.from
+    end
+
+    test "the stripped channel round-trips to a device-free jid (what actually goes on the wire)" do
+      node = dev_node(%{"from" => @other_dev, "id" => "D2"})
+
+      msg =
+        Connection.build_msg(
+          @state,
+          %Proto.Message{conversation: "ping"},
+          node,
+          @other_dev,
+          "D2",
+          @own
+        )
+
+      assert Address.to_jid!(msg.channel) == @other
+      refute Address.to_jid!(msg.channel) =~ ":"
+    end
+
+    test "a group participant's device is stripped from channel but kept on from" do
+      group = "123456789@g.us"
+      node = dev_node(%{"from" => group, "participant" => @other_dev, "id" => "D3"})
+
+      msg =
+        Connection.build_msg(@state, %Proto.Message{conversation: "g"}, node, group, "D3", @own)
+
+      assert %Address{kind: :group, device: nil} = msg.channel
+      assert %Address{user: "5511888888888", device: 29} = msg.from
+    end
+
+    test "a LID-addressed DM from a linked device is stripped too" do
+      lid_dev = "147451226890315:12@lid"
+      node = dev_node(%{"from" => lid_dev, "id" => "D4"})
+
+      msg =
+        Connection.build_msg(
+          @state,
+          %Proto.Message{conversation: "hi"},
+          node,
+          lid_dev,
+          "D4",
+          @own
+        )
+
+      assert %Address{user: "147451226890315", kind: :lid, device: nil} = msg.channel
+      assert Address.to_jid!(msg.channel) == "147451226890315@lid"
+    end
+
+    test "an already account-level DM is unchanged" do
+      node = dev_node(%{"from" => @other, "id" => "D5"})
+
+      msg =
+        Connection.build_msg(@state, %Proto.Message{conversation: "hi"}, node, @other, "D5", @own)
+
+      assert %Address{user: "5511888888888", device: nil} = msg.channel
+      assert %Address{user: "5511888888888", device: nil} = msg.from
+    end
+
+    test "a quoted message's channel (MessageKey.remoteJid) is account-level as well" do
+      # ContextInfo.remoteJid is written by the *sender's* client; a device-bound one
+      # would otherwise flow into the MessageKey a reaction/edit is addressed to.
+      ctx = %Proto.ContextInfo{stanzaId: "Q1", remoteJid: @other_dev, participant: @other_dev}
+
+      proto = %Proto.Message{
+        extendedTextMessage: %Proto.Message.ExtendedTextMessage{text: "re", contextInfo: ctx}
+      }
+
+      node = dev_node(%{"from" => @other_dev, "id" => "D6"})
+
+      msg = Connection.build_msg(@state, proto, node, @other_dev, "D6", @own)
+
+      assert %{channel: %Address{device: nil}} = msg.quoted
+      assert match?(%Msg{}, msg)
+    end
+  end
+
   describe "own_sender?/3 — gate for self-only protocolMessage types (CVE-2026-48063)" do
     alias Amarula.Address
 
