@@ -78,8 +78,21 @@ defmodule Amarula.Msg do
   | `to`      | who it was **addressed to** — the real recipient         | the peer / me| the group     | me              |
 
   To **reply**, put `msg.channel` straight into a send's target — it routes back to the
-  same conversation. In a **1:1, `from == channel`**; in a **group, `from` (the
-  participant) ≠ `channel` (the group)**.
+  same conversation. In a **1:1, `from == channel`** apart from the device (see below);
+  in a **group, `from` (the participant) ≠ `channel` (the group)**.
+
+  > #### `channel` is account-level; `from` is device-level {: .info}
+  >
+  > `channel` never carries a device — it is normalized to the account address, so it
+  > is always safe as a send target. `from` **does** carry the sending device when the
+  > peer wrote from a linked device (WhatsApp Web, desktop), because the writer
+  > identity is per-device.
+  >
+  > So reply with `msg.channel`, not `msg.from`. Sending to a device-bound jid
+  > (`5511999999999:29@s.whatsapp.net`) is rejected by the server with
+  > `{:error, {:send_rejected, "400"}}` — nothing on the send path strips it for you.
+  > If you must build a target from `msg.from`, run it through
+  > `Amarula.Address.normalize/1` first.
 
   ## `from_me` and the real recipient
 
@@ -206,15 +219,20 @@ defmodule Amarula.Msg do
   (the writer `Address` — participant in a group, else the channel), `:to` (the
   addressed identity `Address`), `:from_me`, `:pushname` (the sender's display name
   off the stanza, `nil` when absent), `:timestamp`.
+
+  `:channel` is normalized to its account-level address here (device stripped) — it
+  is the reply handle, and a device-bound one is rejected on send. `:from` keeps its
+  device. See the "Addressing" section above.
   """
   @spec from_proto(Proto.Message.t(), map()) :: t()
   def from_proto(%Proto.Message{} = proto, meta) do
     {type, content} = classify(proto)
     ctx = MessageContent.context_info(proto)
+    channel = normalize_channel(meta[:channel])
 
     %__MODULE__{
       id: meta[:id],
-      channel: meta[:channel],
+      channel: channel,
       from: meta[:from],
       to: meta[:to],
       from_me: meta[:from_me] || false,
@@ -222,7 +240,7 @@ defmodule Amarula.Msg do
       timestamp: meta[:timestamp],
       type: type,
       content: content,
-      quoted: quoted(ctx, meta[:channel]),
+      quoted: quoted(ctx, channel),
       mentions: mentions(ctx),
       forwarded: forwarded?(ctx),
       preview: link_preview(proto),
@@ -271,7 +289,7 @@ defmodule Amarula.Msg do
 
   defp quoted(%Proto.ContextInfo{stanzaId: id} = ctx, channel) when is_binary(id) and id != "" do
     from = address(ctx.participant)
-    channel = address(ctx.remoteJid) || channel
+    channel = normalize_channel(address(ctx.remoteJid)) || channel
 
     inner =
       case ctx.quotedMessage do
@@ -283,6 +301,18 @@ defmodule Amarula.Msg do
   end
 
   defp quoted(_ctx, _channel), do: nil
+
+  # `channel` is the reply handle, so it must name the ACCOUNT, not one device.
+  # A DM stanza's `from` carries the sending device (Signal sessions are per-device
+  # — see `LidMappingFileStore.signal_address/2`), and a DM has no `participant` to
+  # distinguish writer from room, so the room would otherwise inherit that device.
+  # Replying to `5511999999999:29@s.whatsapp.net` is rejected by the server with
+  # `<ack class="message" error="400">` → `{:error, {:send_rejected, "400"}}`, because
+  # nothing on the send path normalizes the target (issue #41).
+  # `nil` passes through: `from_proto/2` never fabricates an address (decrypt-failure
+  # path), and `quoted/2` relies on nil to fall back to the outer channel.
+  defp normalize_channel(nil), do: nil
+  defp normalize_channel(%Address{} = channel), do: Address.normalize(channel)
 
   # The inlined quoted message as a %Msg{} WITHOUT its own `quoted` (one level only).
   defp nested_msg(%Proto.Message{} = proto, id, channel, from) do

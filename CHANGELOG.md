@@ -5,6 +5,53 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.4] - 2026-07-29
+
+### Fixed
+
+- **History sync now surfaces messages and LID↔PN mappings** ([#40]). The
+  `:history_sync` event carries `%{sync_type, chats, contacts, push_names,
+  messages, status_messages, lid_mappings}` — previously `to_result/1` decoded
+  the whole blob but mapped only chat metadata, contact names and push names,
+  dropping every `conversation.messages` list on the floor. The practical
+  impact: a message sent from your phone while a linked device was disconnected
+  is never redelivered live on reconnect, and history sync discarded it too, so
+  it was permanently unrecoverable by any consumer. `messages` and
+  `status_messages` are `%Amarula.Msg{}` lists — the same consumer view the live
+  path emits, so `download_media/1` and the `send_*` helpers work on them. Two
+  caveats a consumer must handle: a history `%Msg{}` has less envelope than a
+  live one (`to` is always `nil`, and `from` is `nil` when `from_me` is true, so
+  branch on `from_me` before reading `from`), and a message may arrive both here
+  and on `:messages_upsert` — dedup by `msg.id`. The LID↔PN mappings are read
+  from all three sources Baileys collects, and are persisted and re-emitted as
+  `:lid_mapping_update`, so a first link learns every synced chat's pair at
+  once. They are stored and emitted only, never asserted: a history blob names
+  every contact you have ever chatted with, so asserting sessions would fetch a
+  prekey bundle for each one — burning a one-time prekey and risking throttling
+  — for sessions nothing needs yet. The new result keys are purely additive, so
+  existing `:history_sync` consumers keep working unchanged.
+- **Replying with `msg.channel` no longer fails with `{:error, {:send_rejected,
+  "400"}}` when the peer wrote from a linked device** ([#41]). `channel` is
+  documented as the reply handle, but for a 1:1 DM it was the stanza's `from`
+  attr verbatim — and that carries the **sending device** (`5511888888888:29@
+  s.whatsapp.net`) whenever the peer types on WhatsApp Web/desktop rather than
+  their phone. A DM has no `participant` attr to separate writer from room, so
+  the room inherited the writer's device; the device is genuinely on the wire
+  because Signal sessions are per-device (the decrypt path reads it off the same
+  jid via `LidMappingFileStore.signal_address/2`). Nothing downstream stripped
+  it — `deliver_async/5` flattens an `Address` target with `Address.to_jid!/1`,
+  which re-encodes `device` verbatim, so a device-bound jid reached the relay
+  stanza's `to` attr and WhatsApp rejected it with `<ack class="message"
+  error="400">`. `Msg.from_proto/2` now normalizes `channel` (and a quoted
+  message's `channel`, which becomes a `MessageKey.remoteJid`) to its
+  account-level address. **`from` is unchanged** — the writer identity
+  legitimately carries the device, and consumers rely on it to recognize their
+  own device. Replying to a peer on their phone was always fine, which made this
+  look intermittent.
+
+[#40]: https://github.com/tubedude/amarula/issues/40
+[#41]: https://github.com/tubedude/amarula/issues/41
+
 ## [0.5.3] - 2026-07-25
 
 ### Fixed
@@ -901,7 +948,10 @@ First public release.
   the supervision tree down and frees the profile slot). The server-side
   device-unlink now lives only in `wipe_credentials/1`.
 
-[Unreleased]: https://github.com/tubedude/amarula/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/tubedude/amarula/compare/v0.5.4...HEAD
+[0.5.4]: https://github.com/tubedude/amarula/compare/v0.5.3...v0.5.4
+[0.5.3]: https://github.com/tubedude/amarula/compare/v0.5.2...v0.5.3
+[0.5.2]: https://github.com/tubedude/amarula/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/tubedude/amarula/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/tubedude/amarula/compare/v0.4.5...v0.5.0
 [0.4.5]: https://github.com/tubedude/amarula/compare/v0.4.4...v0.4.5
