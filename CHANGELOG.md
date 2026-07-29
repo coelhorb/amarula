@@ -5,6 +5,31 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Replying with `msg.channel` no longer fails with `{:error, {:send_rejected,
+  "400"}}` when the peer wrote from a linked device** ([#41]). `channel` is
+  documented as the reply handle, but for a 1:1 DM it was the stanza's `from`
+  attr verbatim — and that carries the **sending device** (`5511888888888:29@
+  s.whatsapp.net`) whenever the peer types on WhatsApp Web/desktop rather than
+  their phone. A DM has no `participant` attr to separate writer from room, so
+  the room inherited the writer's device; the device is genuinely on the wire
+  because Signal sessions are per-device (the decrypt path reads it off the same
+  jid via `LidMappingFileStore.signal_address/2`). Nothing downstream stripped
+  it — `deliver_async/5` flattens an `Address` target with `Address.to_jid!/1`,
+  which re-encodes `device` verbatim, so a device-bound jid reached the relay
+  stanza's `to` attr and WhatsApp rejected it with `<ack class="message"
+  error="400">`. `Msg.from_proto/2` now normalizes `channel` (and a quoted
+  message's `channel`, which becomes a `MessageKey.remoteJid`) to its
+  account-level address. **`from` is unchanged** — the writer identity
+  legitimately carries the device, and consumers rely on it to recognize their
+  own device. Replying to a peer on their phone was always fine, which made this
+  look intermittent.
+
+[#41]: https://github.com/tubedude/amarula/issues/41
+
 ## [0.5.3] - 2026-07-25
 
 ### Fixed
