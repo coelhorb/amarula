@@ -47,8 +47,8 @@ defmodule AmarulaTest do
     assert_received {:got, {:send_text, "x@s.whatsapp.net", "hi", []}}
   end
 
-  test "send_reaction (via {jid, msg_id}) sends to the target's remoteJid", %{conn: conn} do
-    ref = {"x@s.whatsapp.net", "ABC"}
+  test "send_reaction (via {jid, msg_id, from_me}) sends to the target's remoteJid", %{conn: conn} do
+    ref = {"x@s.whatsapp.net", "ABC", false}
     assert {:ok, "MSGID"} = Amarula.send_reaction(conn, ref, "👍")
     assert_received {:got, {:send_message, "x@s.whatsapp.net", msg}}
     assert msg.reactionMessage.text == "👍"
@@ -69,8 +69,169 @@ defmodule AmarulaTest do
     assert out.reactionMessage.key.id == "ABC"
   end
 
+  describe "outbound MessageKey jids are account-level (#46)" do
+    # A message key is an ADDRESS — (chat, fromMe, id) plus `participant` in a group.
+    # Every client normalizes those on decode, so a device suffix names a participant
+    # nobody else agrees on and the key matches no message. `msg.from` carries the
+    # sending device by design, so the library was handing consumers a device-bearing
+    # address and then putting it straight into `participant`.
+    @group "120363000000000000@g.us"
+    @author "5511888888888@s.whatsapp.net"
+    @author_dev "5511888888888:29@s.whatsapp.net"
+
+    defp group_msg(from_jid, opts \\ []) do
+      Amarula.Msg.from_proto(%Proto.Message{conversation: "hi"}, %{
+        id: "ABC",
+        channel: Amarula.Address.parse(@group),
+        from: Amarula.Address.parse(from_jid),
+        from_me: Keyword.get(opts, :from_me, false)
+      })
+    end
+
+    test "a group author's device is stripped from participant", %{conn: conn} do
+      # THE REGRESSION: reacting to a group message written from WhatsApp Web.
+      Amarula.send_reaction(conn, group_msg(@author_dev), "👍")
+
+      assert_received {:got, {:send_message, @group, out}}
+      key = out.reactionMessage.key
+      assert key.participant == @author
+      refute key.participant =~ ":"
+      assert key.remoteJid == @group
+    end
+
+    test "an already account-level participant is unchanged", %{conn: conn} do
+      Amarula.send_reaction(conn, group_msg(@author), "👍")
+
+      assert_received {:got, {:send_message, @group, out}}
+      assert out.reactionMessage.key.participant == @author
+    end
+
+    test "an agent segment is stripped from participant too", %{conn: conn} do
+      Amarula.send_reaction(conn, group_msg("5511888888888_1@s.whatsapp.net"), "👍")
+
+      assert_received {:got, {:send_message, @group, out}}
+      assert out.reactionMessage.key.participant == @author
+    end
+
+    test "fromMe still rides through untouched", %{conn: conn} do
+      # Normalization must not disturb the one field the %Msg{} path already got
+      # right (the `{jid, msg_id}` form's hardcoded false is the open half of #46).
+      Amarula.send_reaction(conn, group_msg(@author_dev, from_me: true), "👍")
+
+      assert_received {:got, {:send_message, @group, out}}
+      assert out.reactionMessage.key.fromMe == true
+      assert out.reactionMessage.key.participant == @author
+    end
+
+    test "send_edit and send_revoke normalize participant as well", %{conn: conn} do
+      msg = group_msg(@author_dev)
+
+      Amarula.send_edit(conn, msg, "v2")
+      assert_received {:got, {:send_message, @group, edit}}
+      assert edit.protocolMessage.key.participant == @author
+
+      Amarula.send_revoke(conn, msg)
+      assert_received {:got, {:send_message, @group, rev}}
+      assert rev.protocolMessage.key.participant == @author
+    end
+
+    test "a device-bearing chat jid in the {jid, id, from_me} form is normalized", %{conn: conn} do
+      # A caller who passes `msg.from` as the chat would otherwise reintroduce it.
+      Amarula.send_reaction(conn, {@author_dev, "ABC", false}, "👍")
+
+      assert_received {:got, {:send_message, target, out}}
+      assert target == @author
+      assert out.reactionMessage.key.remoteJid == @author
+    end
+
+    test "a group jid passes through unchanged (normalization is idempotent)", %{conn: conn} do
+      Amarula.send_reaction(conn, {@group, "ABC", false}, "👍")
+
+      assert_received {:got, {:send_message, @group, out}}
+      assert out.reactionMessage.key.remoteJid == @group
+    end
+
+    test "resolve_quoted's resend key normalizes the quoted author", %{conn: conn} do
+      # A quote whose inline copy is absent → the server-resend path, which builds
+      # its own key from `quoted.from`.
+      ctx = %Proto.ContextInfo{stanzaId: "QID", participant: @author_dev}
+
+      msg =
+        Amarula.Msg.from_proto(
+          %Proto.Message{
+            extendedTextMessage: %Proto.Message.ExtendedTextMessage{text: "re", contextInfo: ctx}
+          },
+          %{id: "REPLY", channel: Amarula.Address.parse(@group)}
+        )
+
+      assert {:requested, _} = Amarula.resolve_quoted(conn, msg)
+      assert_received {:got, {:request_resend, key}}
+      assert key.participant == @author
+      assert key.remoteJid == @group
+    end
+  end
+
+  describe "outbound MessageKey carries from_me (#46)" do
+    import ExUnit.CaptureIO
+
+    @pn "5511888888888@s.whatsapp.net"
+    @pn_dev "5511888888888:29@s.whatsapp.net"
+
+    test "the {jid, id, from_me} tuple sets fromMe explicitly", %{conn: conn} do
+      Amarula.send_reaction(conn, {@pn, "ABC", true}, "👍")
+      assert_received {:got, {:send_message, @pn, out}}
+      assert out.reactionMessage.key.fromMe == true
+
+      Amarula.send_reaction(conn, {@pn, "ABC", false}, "👍")
+      assert_received {:got, {:send_message, @pn, out2}}
+      assert out2.reactionMessage.key.fromMe == false
+    end
+
+    test "the 4-tuple carries a group participant, account-level", %{conn: conn} do
+      Amarula.send_reaction(conn, {"g@g.us", "ABC", false, @pn_dev}, "👍")
+      assert_received {:got, {:send_message, "g@g.us", out}}
+      assert out.reactionMessage.key.fromMe == false
+      # participant is normalized on the way out (device stripped).
+      assert out.reactionMessage.key.participant == @pn
+    end
+
+    test "a self-op (send_edit) defaults the deprecated 2-tuple to fromMe: true", %{conn: conn} do
+      # send_edit/revoke/pin/keep act on OUR OWN messages, so `false` (the old
+      # hardcoded value) was the wrong default — the edit silently matched nothing.
+      warning =
+        capture_io(:stderr, fn -> Amarula.send_edit(conn, {@pn, "ABC"}, "v2") end)
+
+      assert warning =~ "deprecated"
+      assert_received {:got, {:send_message, @pn, out}}
+      assert out.protocolMessage.key.fromMe == true
+    end
+
+    test "send_reaction defaults the deprecated 2-tuple to fromMe: false", %{conn: conn} do
+      warning =
+        capture_io(:stderr, fn -> Amarula.send_reaction(conn, {@pn, "ABC"}, "👍") end)
+
+      assert warning =~ "deprecated"
+      assert_received {:got, {:send_message, @pn, out}}
+      assert out.reactionMessage.key.fromMe == false
+    end
+
+    test "a %Amarula.Msg{} carries its own from_me through", %{conn: conn} do
+      msg =
+        Amarula.Msg.from_proto(%Proto.Message{conversation: "hi"}, %{
+          id: "ABC",
+          channel: Amarula.Address.parse(@pn),
+          from: Amarula.Address.parse(@pn),
+          from_me: true
+        })
+
+      Amarula.send_reaction(conn, msg, "👍")
+      assert_received {:got, {:send_message, @pn, out}}
+      assert out.reactionMessage.key.fromMe == true
+    end
+  end
+
   test "send_edit / send_revoke build the right protocol message", %{conn: conn} do
-    ref = {"x@s.whatsapp.net", "ABC"}
+    ref = {"x@s.whatsapp.net", "ABC", true}
 
     Amarula.send_edit(conn, ref, "v2")
     assert_received {:got, {:send_message, "x@s.whatsapp.net", edit}}
@@ -130,7 +291,7 @@ defmodule AmarulaTest do
   end
 
   test "pin/unpin and keep/unkeep build the right protocol message", %{conn: conn} do
-    ref = {"g@g.us", "ABC"}
+    ref = {"g@g.us", "ABC", true}
 
     Amarula.pin_message(conn, ref)
     assert_received {:got, {:send_message, "g@g.us", pin}}
@@ -322,10 +483,10 @@ defmodule AmarulaTest do
       assert msg.listResponseMessage.singleSelectReply.selectedRowId == "row1"
     end
 
-    test "accepts a lightweight {jid, msg_id} ref with explicit :kind/:text/:index", %{
+    test "accepts a lightweight {jid, id, from_me} ref with explicit :kind/:text/:index", %{
       conn: conn
     } do
-      ref = {"x@s.whatsapp.net", "PROMPT2"}
+      ref = {"x@s.whatsapp.net", "PROMPT2", false}
 
       assert {:ok, "MSGID"} =
                Amarula.send_options_reply(conn, ref, "b",
@@ -342,7 +503,7 @@ defmodule AmarulaTest do
     end
 
     test "raises when :kind can't be determined (tuple ref, no override)", %{conn: conn} do
-      ref = {"x@s.whatsapp.net", "PROMPT3"}
+      ref = {"x@s.whatsapp.net", "PROMPT3", false}
 
       assert_raise ArgumentError, ~r/can't determine :kind/, fn ->
         Amarula.send_options_reply(conn, ref, "yes", text: "Yes")

@@ -158,15 +158,31 @@ defmodule Amarula do
 
   @typedoc """
   A reference to a specific existing message (for reactions / edits / deletes /
-  poll votes). Either:
+  poll votes). One of:
 
-    * the `%Amarula.Msg{}` you received (carries its chat, sender, id), or
-    * a `{jid, msg_id}` tuple — the chat `jid` plus the message id string.
+    * the `%Amarula.Msg{}` you received (carries its chat, sender, id, `from_me`), or
+    * a received `key`/`poll_key` — an `Amarula.Msg.ref/0`, already remapped to your
+      perspective, or
+    * a `{jid, msg_id, from_me}` tuple you build for a message you know by id — the
+      chat, the message id, and whether *you* sent it (add a 4th `participant` jid
+      for a group target).
 
-  Both are self-contained. (Quote *replies* use the `:quoted` opt on `send_text`,
-  which takes the `%Amarula.Msg{}` directly.)
+  > #### The bare `{jid, msg_id}` tuple is deprecated {: .warning}
+  >
+  > It can't say whether the message is yours, so it assumes a per-operation default
+  > (`from_me: true` for `send_edit`/`send_revoke`/`pin_message`/`keep_message`, which
+  > act on **your own** messages; `false` elsewhere). A wrong `from_me` makes an
+  > edit/revoke silently match nothing (the payload is E2E-encrypted, so the server
+  > can't reject it). Pass the explicit `{jid, msg_id, from_me}` form instead.
+
+  (Quote *replies* use the `:quoted` opt on `send_text`, which takes the
+  `%Amarula.Msg{}` directly.)
   """
-  @type message_ref :: Amarula.Msg.t() | {jid(), String.t()}
+  @type message_ref ::
+          Amarula.Msg.t()
+          | {jid(), String.t(), boolean()}
+          | {jid(), String.t(), boolean(), jid()}
+          | {jid(), String.t()}
 
   @typedoc "Result of a send: the assigned message id, or an error."
   @type send_result :: {:ok, msg_id :: String.t()} | {:error, term()}
@@ -708,7 +724,8 @@ defmodule Amarula do
 
   @doc """
   Cast a vote on an existing poll. `poll` is a `message_ref` for the poll-creation
-  message (a `%Amarula.Msg{}` or `{jid, msg_id}` tuple); `message_secret` is the
+  message (a `%Amarula.Msg{}`, a received `poll_key`, or a `{jid, msg_id, from_me}`
+  tuple); `message_secret` is the
   poll's 32-byte secret (from `send_poll/5`, or the poll's `messageContextInfo`);
   `option_names` are the chosen options. The vote is encrypted under the secret.
 
@@ -904,14 +921,15 @@ defmodule Amarula do
   @doc """
   Ask the phone for older history of a chat (a PEER_DATA_OPERATION on-demand
   request). `oldest` identifies the oldest message you already have — pass the
-  `%Amarula.Msg{}` you received (most accurate) or a `{jid, msg_id}` tuple.
+  `%Amarula.Msg{}` you received (most accurate) or a `{jid, msg_id, from_me}` tuple.
   `oldest_ts` is that message's millisecond timestamp and `count` how many older
   messages to request. The history arrives
   **asynchronously** later via the normal `:history_sync` event. Returns
   `{:ok, request_msg_id}` or `{:error, :not_authenticated}`.
 
-  > A `{jid, msg_id}` tuple can't know `from_me`/`participant`, so prefer the
-  > `%Amarula.Msg{}` for a message you sent or a group message.
+  > The bare `{jid, msg_id}` tuple can't know `from_me`/`participant`, so prefer the
+  > `%Amarula.Msg{}` (or the explicit `{jid, msg_id, from_me}`) for a message you
+  > sent or a group message.
   """
   @spec fetch_history(conn(), message_ref(), integer(), non_neg_integer()) :: send_result()
   def fetch_history(conn, oldest, oldest_ts, count) do
@@ -944,9 +962,9 @@ defmodule Amarula do
 
   def resolve_quoted(conn, %Amarula.Msg{quoted: q} = msg) do
     key = %Proto.MessageKey{
-      remoteJid: Amarula.Address.to_jid!(q.channel || msg.channel),
+      remoteJid: key_jid(q.channel || msg.channel),
       id: q.id,
-      participant: q.from && Amarula.Address.to_jid!(q.from)
+      participant: q.from && key_jid(q.from)
     }
 
     case GenServer.call(conn, {:request_resend, key}, @send_call_timeout) do
@@ -957,7 +975,7 @@ defmodule Amarula do
 
   @doc """
   React to a message with `emoji` (empty string removes the reaction). `ref` is a
-  `%Amarula.Msg{}` or a `{jid, msg_id}` tuple.
+  received `content.key` or a `%Amarula.Msg{}` — see `t:message_ref/0`.
   """
   @spec send_reaction(conn(), message_ref(), String.t()) :: send_result()
   def send_reaction(conn, ref, emoji) do
@@ -967,21 +985,21 @@ defmodule Amarula do
 
   @doc """
   Edit a message we sent, replacing its text. `ref` is a `%Amarula.Msg{}` or a
-  `{jid, msg_id}` tuple.
+  `{jid, msg_id, from_me}` tuple (see `t:message_ref/0`).
   """
   @spec send_edit(conn(), message_ref(), String.t()) :: send_result()
   def send_edit(conn, ref, new_text) do
-    {jid, key} = message_key(ref)
+    {jid, key} = message_key(ref, true)
     send_built(conn, jid, MessageEncoder.edit(key, new_text))
   end
 
   @doc """
   Delete a message for everyone (revoke). `ref` is a `%Amarula.Msg{}` or a
-  `{jid, msg_id}` tuple.
+  `{jid, msg_id, from_me}` tuple (see `t:message_ref/0`).
   """
   @spec send_revoke(conn(), message_ref()) :: send_result()
   def send_revoke(conn, ref) do
-    {jid, key} = message_key(ref)
+    {jid, key} = message_key(ref, true)
     send_built(conn, jid, MessageEncoder.revoke(key))
   end
 
@@ -1002,10 +1020,10 @@ defmodule Amarula do
     end
   end
 
-  @doc "Pin a message for everyone in the chat. `ref` is a `%Amarula.Msg{}` or `{jid, msg_id}`."
+  @doc "Pin a message for everyone in the chat. `ref` is a `%Amarula.Msg{}` or a `{jid, msg_id, from_me}` tuple."
   @spec pin_message(conn(), message_ref()) :: send_result()
   def pin_message(conn, ref) do
-    {jid, key} = message_key(ref)
+    {jid, key} = message_key(ref, true)
     send_built(conn, jid, MessageEncoder.pin(key, true))
   end
 
@@ -1106,27 +1124,27 @@ defmodule Amarula do
     send_built(conn, Amarula.Address.to_jid!(jid), MessageEncoder.event(name, opts))
   end
 
-  @doc "Unpin a previously pinned message. `ref` is a `%Amarula.Msg{}` or `{jid, msg_id}`."
+  @doc "Unpin a previously pinned message. `ref` is a `%Amarula.Msg{}` or a `{jid, msg_id, from_me}` tuple."
   @spec unpin_message(conn(), message_ref()) :: send_result()
   def unpin_message(conn, ref) do
-    {jid, key} = message_key(ref)
+    {jid, key} = message_key(ref, true)
     send_built(conn, jid, MessageEncoder.pin(key, false))
   end
 
   @doc """
   Keep a message in a disappearing chat (exempt it from auto-delete). `ref` is a
-  `%Amarula.Msg{}` or `{jid, msg_id}`.
+  `%Amarula.Msg{}` or a `{jid, msg_id, from_me}` tuple.
   """
   @spec keep_message(conn(), message_ref()) :: send_result()
   def keep_message(conn, ref) do
-    {jid, key} = message_key(ref)
+    {jid, key} = message_key(ref, true)
     send_built(conn, jid, MessageEncoder.keep(key, true))
   end
 
-  @doc "Undo a previous keep (let the message disappear again). `ref` is a `%Amarula.Msg{}` or `{jid, msg_id}`."
+  @doc "Undo a previous keep (let the message disappear again). `ref` is a `%Amarula.Msg{}` or a `{jid, msg_id, from_me}` tuple."
   @spec unkeep_message(conn(), message_ref()) :: send_result()
   def unkeep_message(conn, ref) do
-    {jid, key} = message_key(ref)
+    {jid, key} = message_key(ref, true)
     send_built(conn, jid, MessageEncoder.keep(key, false))
   end
 
@@ -1280,23 +1298,78 @@ defmodule Amarula do
     do: GenServer.call(conn, {:send_message, jid, message}, @send_call_timeout)
 
   # Resolve a public message_ref into the chat jid + the %Proto.MessageKey{} the
-  # encoders need. A %Amarula.Msg{} carries everything (chat, sender, id, fromMe);
-  # a {jid, msg_id} tuple builds the minimal key (no participant/fromMe known).
-  defp message_key(%Amarula.Msg{} = msg) do
-    jid = Amarula.Address.to_jid!(msg.channel)
+  # encoders need. A %Amarula.Msg{} and the widened `{jid, id, from_me[, participant]}`
+  # tuples carry `fromMe` explicitly; the deprecated bare `{jid, id}` tuple can't, so
+  # it takes the operation's `default_from_me` (self-ops pass `true`). All jids are
+  # normalized to account-level via `key_jid/1`.
+  defp message_key(ref, default_from_me \\ false)
+
+  defp message_key(%Amarula.Msg{} = msg, _default) do
+    jid = key_jid(msg.channel)
 
     key = %Proto.MessageKey{
       remoteJid: jid,
       id: msg.id,
       fromMe: msg.from_me,
-      participant: msg.from && Amarula.Address.to_jid!(msg.from)
+      participant: msg.from && key_jid(msg.from)
     }
 
     {jid, key}
   end
 
-  defp message_key({jid, msg_id}) when is_binary(msg_id) do
-    jid = Amarula.Address.to_jid!(jid)
-    {jid, %Proto.MessageKey{remoteJid: jid, id: msg_id, fromMe: false}}
+  defp message_key({jid, msg_id, from_me}, _default)
+       when is_binary(msg_id) and is_boolean(from_me) do
+    jid = key_jid(jid)
+    {jid, %Proto.MessageKey{remoteJid: jid, id: msg_id, fromMe: from_me}}
+  end
+
+  defp message_key({jid, msg_id, from_me, participant}, _default)
+       when is_binary(msg_id) and is_boolean(from_me) do
+    jid = key_jid(jid)
+
+    {jid,
+     %Proto.MessageKey{
+       remoteJid: jid,
+       id: msg_id,
+       fromMe: from_me,
+       participant: participant && key_jid(participant)
+     }}
+  end
+
+  defp message_key({jid, msg_id}, default_from_me) when is_binary(msg_id) do
+    IO.warn(
+      "the {jid, msg_id} message_ref is deprecated (it can't say whether the message " <>
+        "is yours, so it assumes from_me: #{default_from_me}). Pass {jid, msg_id, from_me} instead."
+    )
+
+    message_key({jid, msg_id, default_from_me}, default_from_me)
+  end
+
+  # A jid as it appears in a `%Proto.MessageKey{}`: ACCOUNT-level, never
+  # device-bearing.
+  #
+  # A message key is an address — `(chat, fromMe, id)` plus `participant` in a group
+  # — and every client normalizes those fields on decode, so a device suffix names a
+  # participant nobody else agrees on and the key matches no message. Baileys does
+  # this in `processMessage` (`message.key.participant =
+  # jidNormalizedUser(...)`, `Utils/process-message.ts`).
+  #
+  # This matters because `msg.from` carries the sending device BY DESIGN (it is the
+  # writer identity — see `Amarula.Msg`), so the library itself hands consumers a
+  # device-bearing address, and the obvious call
+  # `Amarula.send_reaction(conn, msg, "\u{1F44D}")` fed it straight into
+  # `participant`. Group reactions/edits/pins aimed at anyone writing from a linked
+  # device silently pointed at nothing.
+  #
+  # `remoteJid` goes through the same helper: `msg.channel` is already account-level
+  # (#41), but a caller passing a device-bearing chat jid in the `{jid, msg_id}` form
+  # would otherwise reintroduce it. Idempotent for group jids.
+  defp key_jid(jid_or_address) do
+    jid = Amarula.Address.to_jid!(jid_or_address)
+
+    case Amarula.Protocol.Binary.JID.jid_normalized_user(jid) do
+      "" -> jid
+      normalized -> normalized
+    end
   end
 end

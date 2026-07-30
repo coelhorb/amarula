@@ -1070,7 +1070,9 @@ defmodule Amarula.Protocol.Socket.ReceiveFlowTest do
       assert %Amarula.Msg{type: :edit, content: %Amarula.Content.Edit{text: "corrected"} = edit} =
                msg
 
-      assert edit.key == {@jid, "ORIG1"}
+      # The edited message is the PEER's (inbound), so the remapped key is
+      # account-level @jid + from_me: false (#46/#47).
+      assert edit.key == {@jid, "ORIG1", false}
       assert %{tag: "receipt"} = recv_frame()
     end
 
