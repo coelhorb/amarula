@@ -729,9 +729,10 @@ defmodule Amarula do
   poll's 32-byte secret (from `send_poll/5`, or the poll's `messageContextInfo`);
   `option_names` are the chosen options. The vote is encrypted under the secret.
 
-  The poll's creator is taken from the ref: our own identity when the ref is a
-  `%Amarula.Msg{}` we sent, else its `participant` (a group poll's author) or the
-  `{jid, _}` chat (a 1:1 poll the peer created). Pass `:creator` to override.
+  The poll's creator is taken from the ref: our own identity when the ref says
+  `from_me` (a `%Amarula.Msg{}` we sent, or a `{jid, id, true}` tuple), else its
+  `participant` (a group poll's author) or the `{jid, _}` chat (a 1:1 poll the peer
+  created). Pass `:creator` to override.
 
   > #### Which identity votes {: .info}
   >
@@ -761,8 +762,10 @@ defmodule Amarula do
   # the PEER, so attributing a poll we created to them derives the wrong key.
   # Device/agent normalization happens in PollCrypto, at the crypto boundary (#48).
   #
-  # NOTE: the `{jid, msg_id}` tuple form always carries `fromMe: false` (#46), so a
-  # 1:1 poll *we* created still needs an explicit `:creator` until that is fixed.
+  # NOTE: the widened `{jid, msg_id, from_me}` ref carries `fromMe` (#46/#47), so a
+  # 1:1 poll *we* created resolves to us via `{jid, id, true}`. The DEPRECATED bare
+  # `{jid, msg_id}` 2-tuple defaults `fromMe: false` here, so with it a self-created
+  # 1:1 poll still needs an explicit `:creator`.
   defp resolve_creator(nil, %Proto.MessageKey{fromMe: true}, voter), do: voter
   defp resolve_creator(nil, %Proto.MessageKey{participant: p}, _voter) when is_binary(p), do: p
   defp resolve_creator(nil, %Proto.MessageKey{remoteJid: jid}, _voter), do: jid
