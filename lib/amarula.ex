@@ -712,8 +712,18 @@ defmodule Amarula do
   poll's 32-byte secret (from `send_poll/5`, or the poll's `messageContextInfo`);
   `option_names` are the chosen options. The vote is encrypted under the secret.
 
-  The poll's creator is taken from the ref (a `%Amarula.Msg{}`'s sender, or the
-  `{jid, _}` chat for a 1:1 poll).
+  The poll's creator is taken from the ref: our own identity when the ref is a
+  `%Amarula.Msg{}` we sent, else its `participant` (a group poll's author) or the
+  `{jid, _}` chat (a 1:1 poll the peer created). Pass `:creator` to override.
+
+  > #### Which identity votes {: .info}
+  >
+  > The vote's key is derived from the creator and voter jids, so both must match
+  > what a recipient derives. Device/agent segments are normalized away at the
+  > crypto boundary (`Amarula.Protocol.Messages.PollCrypto`, #48), so a
+  > device-bearing `:creator` is safe to pass. The **PN/LID** choice is not
+  > normalizable — in a LID-addressed group the voter keys on their LID — so pass
+  > `:creator` explicitly there.
 
   ## Options
 
@@ -723,15 +733,23 @@ defmodule Amarula do
   def send_poll_vote(conn, poll, message_secret, option_names, opts \\ []) do
     opts = NimbleOptions.validate!(opts, @send_poll_vote_opts)
     {jid, key} = message_key(poll)
-    creator = opts[:creator] |> resolve_creator(key)
     voter = Amarula.Address.to_jid!(own_address(conn))
+    creator = resolve_creator(opts[:creator], key, voter)
     message = MessageEncoder.poll_vote(key, creator, voter, message_secret, option_names)
     send_built(conn, jid, message)
   end
 
-  defp resolve_creator(nil, %Proto.MessageKey{participant: p}) when is_binary(p), do: p
-  defp resolve_creator(nil, %Proto.MessageKey{remoteJid: jid}), do: jid
-  defp resolve_creator(creator, _key), do: Amarula.Address.to_jid!(creator)
+  # Mirrors Baileys' `getKeyAuthor` (`Utils/generics.ts`): `fromMe` short-circuits to
+  # *us* and never falls through to participant/remoteJid — which for a 1:1 poll is
+  # the PEER, so attributing a poll we created to them derives the wrong key.
+  # Device/agent normalization happens in PollCrypto, at the crypto boundary (#48).
+  #
+  # NOTE: the `{jid, msg_id}` tuple form always carries `fromMe: false` (#46), so a
+  # 1:1 poll *we* created still needs an explicit `:creator` until that is fixed.
+  defp resolve_creator(nil, %Proto.MessageKey{fromMe: true}, voter), do: voter
+  defp resolve_creator(nil, %Proto.MessageKey{participant: p}, _voter) when is_binary(p), do: p
+  defp resolve_creator(nil, %Proto.MessageKey{remoteJid: jid}, _voter), do: jid
+  defp resolve_creator(creator, _key, _voter), do: Amarula.Address.to_jid!(creator)
 
   @send_options_reply_opts NimbleOptions.new!(
                              kind: [
