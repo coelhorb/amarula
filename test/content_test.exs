@@ -94,7 +94,7 @@ defmodule Amarula.ContentTest do
              c
   end
 
-  test "pin/keep carry the target as a {jid, msg_id} ref" do
+  test "pin/keep carry the target as a widened {jid, id, from_me} ref" do
     key = %Proto.MessageKey{remoteJid: "x@s", id: "A"}
 
     pin =
@@ -102,14 +102,14 @@ defmodule Amarula.ContentTest do
         pinInChatMessage: %Proto.Message.PinInChatMessage{key: key, type: :PIN_FOR_ALL}
       })
 
-    assert pin == %Content.Pin{key: {"x@s", "A"}, pinned?: true}
+    assert pin == %Content.Pin{key: {"x@s", "A", false}, pinned?: true}
 
     keep =
       content(%Proto.Message{
         keepInChatMessage: %Proto.Message.KeepInChatMessage{key: key, keepType: :KEEP_FOR_ALL}
       })
 
-    assert keep == %Content.Keep{key: {"x@s", "A"}, kept?: true}
+    assert keep == %Content.Keep{key: {"x@s", "A", false}, kept?: true}
   end
 
   test "interactive responses unify into %Content.Response{kind, id, text}" do

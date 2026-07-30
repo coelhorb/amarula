@@ -3448,6 +3448,12 @@ defmodule Amarula.Connection do
         {stanza_from, to_addr}
       end
 
+    # Reply-style messages (reaction/edit/revoke/pin/keep/poll-vote) embed a
+    # target-message key written from the SENDER'S perspective. Remap it to OURS
+    # before the consumer sees it, so a received `key` is safe to feed straight
+    # back to `send_reaction`/`send_edit`/… as `Amarula.Msg` promises (#47).
+    proto = normalize_reply_keys(state, proto, channel, from_me?, from_addr)
+
     Amarula.Msg.from_proto(proto, %{
       id: msg_id,
       channel: channel,
@@ -3459,6 +3465,102 @@ defmodule Amarula.Connection do
       timestamp: parse_ts(NodeUtils.get_attr(node, "t"))
     })
   end
+
+  # An embedded `%Proto.MessageKey{}` names its TARGET from the AUTHOR'S perspective:
+  # in a DM the peer's `remoteJid` is *us* and `fromMe` is false-from-their-side, so
+  # feeding it straight back to `send_reaction` reacts to ourselves. Rewrite each
+  # embedded key to OUR perspective — the same normalisation Baileys does in
+  # `processMessage`/`normaliseKey`: `remoteJid` ← the chat as we see it (`channel`,
+  # already account-level), `fromMe` recomputed against our own account (PN *and*
+  # LID, via `own_account?/2`), and the target's author preserved as `participant`
+  # (for a group carrier, filled from the carrier's participant when the sender
+  # omitted it). #47. Groups masked the bug (a group jid is identical from every
+  # perspective) — the DM case is where it bit.
+  #
+  # A `from_me?` carrier already embeds keys in our perspective, so leave it alone;
+  # ditto when there is no `channel` to remap onto (the decrypt-failure path).
+  defp normalize_reply_keys(_state, proto, _channel, true, _from), do: proto
+  defp normalize_reply_keys(_state, proto, nil, _from_me?, _from), do: proto
+
+  defp normalize_reply_keys(
+         state,
+         %Proto.Message{reactionMessage: %{key: key} = r} = proto,
+         channel,
+         _from_me?,
+         from
+       )
+       when not is_nil(key),
+       do: %{proto | reactionMessage: %{r | key: our_perspective(state, key, channel, from)}}
+
+  defp normalize_reply_keys(
+         state,
+         %Proto.Message{pollUpdateMessage: %{pollCreationMessageKey: key} = m} = proto,
+         channel,
+         _from_me?,
+         from
+       )
+       when not is_nil(key),
+       do: %{
+         proto
+         | pollUpdateMessage: %{
+             m
+             | pollCreationMessageKey: our_perspective(state, key, channel, from)
+           }
+       }
+
+  # Only the key-bearing protocol types (edit/revoke) name a message in this chat;
+  # other protocolMessages (history sync, key share, …) either carry no key or a key
+  # with unrelated semantics — leave those untouched.
+  defp normalize_reply_keys(
+         state,
+         %Proto.Message{protocolMessage: %{type: type, key: key} = pm} = proto,
+         channel,
+         _from_me?,
+         from
+       )
+       when not is_nil(key) and type in [:MESSAGE_EDIT, :REVOKE],
+       do: %{proto | protocolMessage: %{pm | key: our_perspective(state, key, channel, from)}}
+
+  defp normalize_reply_keys(
+         state,
+         %Proto.Message{pinInChatMessage: %{key: key} = m} = proto,
+         channel,
+         _from_me?,
+         from
+       )
+       when not is_nil(key),
+       do: %{proto | pinInChatMessage: %{m | key: our_perspective(state, key, channel, from)}}
+
+  defp normalize_reply_keys(
+         state,
+         %Proto.Message{keepInChatMessage: %{key: key} = m} = proto,
+         channel,
+         _from_me?,
+         from
+       )
+       when not is_nil(key),
+       do: %{proto | keepInChatMessage: %{m | key: our_perspective(state, key, channel, from)}}
+
+  defp normalize_reply_keys(_state, proto, _channel, _from_me?, _from), do: proto
+
+  # Rewrite one embedded key to our perspective (see `normalize_reply_keys/5`).
+  defp our_perspective(state, %Proto.MessageKey{} = key, %Amarula.Address{} = channel, from) do
+    author = key.participant || key.remoteJid
+
+    %{
+      key
+      | remoteJid: Amarula.Address.to_jid!(channel),
+        fromMe: key.fromMe != true and own_account?(state, maybe_address(author)),
+        participant: key.participant || group_participant(channel, from)
+    }
+  end
+
+  # The carrier's own participant, but only for a group target — a DM key carries no
+  # participant, and fabricating one from the peer would be wrong.
+  defp group_participant(%Amarula.Address{kind: :group}, %Amarula.Address{} = from),
+    do: Amarula.Address.to_jid!(from)
+
+  defp group_participant(_channel, _from), do: nil
 
   # Stash each decrypted message's messageContextInfo.messageSecret keyed by the
   # stanza id (what a later edit's targetMessageKey.id references), together with

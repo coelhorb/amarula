@@ -40,14 +40,20 @@ defmodule Amarula.MsgTest do
     assert m.mimetype == "image/jpeg"
   end
 
-  test "reaction carries the target as a {jid, msg_id} ref + emoji (not a proto key)" do
+  test "reaction carries the target as a widened {jid, id, from_me} ref + emoji (not a proto key)" do
     key = %Proto.MessageKey{id: "ABC", remoteJid: "x@s.whatsapp.net"}
 
     msg =
       build(%Proto.Message{reactionMessage: %Proto.Message.ReactionMessage{key: key, text: "👍"}})
 
     assert msg.type == :reaction
-    assert msg.content == %Amarula.Content.Reaction{key: {"x@s.whatsapp.net", "ABC"}, emoji: "👍"}
+
+    # from_proto widens the key but does NOT remap perspective (that is
+    # Connection.build_msg's job) — an unset proto fromMe widens to false.
+    assert msg.content == %Amarula.Content.Reaction{
+             key: {"x@s.whatsapp.net", "ABC", false},
+             emoji: "👍"
+           }
   end
 
   test "envelope fields are carried (channel/from/to)" do

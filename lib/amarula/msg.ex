@@ -8,9 +8,10 @@ defmodule Amarula.Msg do
 
   **The rule:** `content` is an `Amarula.Content.*` struct (never a raw protobuf),
   except `:text` (a `String.t()`) and `:other` (`nil`). The raw `%Proto.Message{}`
-  is always on `raw`. Any `key`/`poll_key` is a `{jid, msg_id}` reference — the same
-  form the send API takes, so you can pass a received reaction's `key` straight to
-  `Amarula.send_reaction/3`.
+  is always on `raw`. Any `key`/`poll_key` is a `t:ref/0` — a `{chat, id, from_me}`
+  tuple (plus `participant` for a group target), already **remapped to your
+  perspective** (`from_me` = whether the target is a message *you* sent), so you can
+  pass a received reaction's `key` straight to `Amarula.send_reaction/3`.
 
   | `type`        | `content`                                              |
   |---------------|--------------------------------------------------------|
@@ -163,6 +164,18 @@ defmodule Amarula.Msg do
   alias Amarula.Protocol.Proto
 
   @type media_kind :: :image | :video | :audio | :document | :sticker
+
+  @typedoc """
+  A reference to a target message, as carried on a received reaction/edit/revoke/
+  pin/keep/poll-vote `key`. A `{chat, id, from_me}` tuple (plus `participant` for a
+  group target), already remapped to **your** perspective — so you can feed it
+  straight to `Amarula.send_reaction/3`, `send_edit/3`, `Amarula.send_poll_vote/5`,
+  etc. `from_me` is whether the target message is one **you** sent.
+  """
+  @type ref ::
+          {chat :: String.t(), id :: String.t(), from_me :: boolean()}
+          | {chat :: String.t(), id :: String.t(), from_me :: boolean(),
+             participant :: String.t()}
 
   @typedoc """
   A quoted message a reply points at. `id`/`participant` identify the original;
@@ -447,9 +460,19 @@ defmodule Amarula.Msg do
     end
   end
 
-  # A %Proto.MessageKey{} → a {jid, msg_id} message_ref (the form the send API
-  # takes), or nil. Drops fromMe/participant — available on msg.raw if needed.
-  defp ref(%Proto.MessageKey{remoteJid: jid, id: id}), do: {jid, id}
+  # A %Proto.MessageKey{} → a widened message_ref (the form the send API takes),
+  # or nil. Carries `from_me` (and `participant` for a group target) so the ref
+  # round-trips back through `Amarula.send_reaction/3` etc. correctly — the key was
+  # already remapped to our perspective upstream (`Connection.normalize_reply_keys`,
+  # #47), so this is a pure widening, no identity logic here.
+  defp ref(%Proto.MessageKey{remoteJid: jid, id: id, fromMe: from_me, participant: p})
+       when is_binary(jid) and is_binary(id) and is_binary(p) and p != "",
+       do: {jid, id, from_me == true, p}
+
+  defp ref(%Proto.MessageKey{remoteJid: jid, id: id, fromMe: from_me})
+       when is_binary(jid) and is_binary(id),
+       do: {jid, id, from_me == true}
+
   defp ref(_), do: nil
 
   # PollUpdateMessage → %Content.PollVote{}: the poll being voted on + the encrypted
