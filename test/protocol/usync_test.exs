@@ -5,6 +5,59 @@ defmodule Amarula.Protocol.USyncTest do
   alias Amarula.Protocol.USync
   alias Amarula.Protocol.USync.Protocols
 
+  describe "with_user/2 — the <user jid> is account-level (#49)" do
+    # A device-suffixed <user jid> makes the server drop the WHOLE query with no
+    # reply (a timeout that takes every other jid in the batch with it). Callers
+    # legitimately hold device-bearing addresses — `msg.from` carries the sending
+    # device by design, and our own `me.id` carries our companion device — so the
+    # invariant is enforced here rather than trusted at each call site.
+    test "strips the device from an %{id: jid} user" do
+      assert %{users: [%{id: "5511888888888@s.whatsapp.net"}]} =
+               USync.new() |> USync.with_user(%{id: "5511888888888:29@s.whatsapp.net"})
+    end
+
+    test "strips the device from a LID user too" do
+      assert %{users: [%{id: "147451226890315@lid"}]} =
+               USync.new() |> USync.with_user(%{id: "147451226890315:12@lid"})
+    end
+
+    test "leaves an already account-level jid untouched" do
+      assert %{users: [%{id: "5511888888888@s.whatsapp.net"}]} =
+               USync.new() |> USync.with_user(%{id: "5511888888888@s.whatsapp.net"})
+    end
+
+    test "preserves the other keys on the user map" do
+      assert %{users: [%{id: "1234@s.whatsapp.net", lid: "99@lid"}]} =
+               USync.new() |> USync.with_user(%{id: "1234:5@s.whatsapp.net", lid: "99@lid"})
+    end
+
+    test "a %{phone: _} user is not a jid and passes through" do
+      assert %{users: [%{phone: "+15551234567"}]} =
+               USync.new() |> USync.with_user(%{phone: "+15551234567"})
+    end
+
+    test "an undecodable jid passes through rather than collapsing to an empty id" do
+      # jid_normalized_user/1 yields "" here; an empty <user jid> would be a silent
+      # bad query, so the original is kept and stays diagnosable.
+      assert %{users: [%{id: "not-a-jid"}]} =
+               USync.new() |> USync.with_user(%{id: "not-a-jid"})
+    end
+
+    test "the normalized jid is what reaches the built iq node" do
+      query =
+        USync.new()
+        |> USync.with_protocol(:status)
+        |> USync.with_user(%{id: "5511888888888:29@s.whatsapp.net"})
+
+      assert {:ok, iq} = USync.build_iq(query, "sid-1")
+      usync = NodeUtils.get_binary_node_child(iq, "usync")
+      list = NodeUtils.get_binary_node_child(usync, "list")
+      assert [%Node{attrs: %{"jid" => jid}}] = list.content
+      assert jid == "5511888888888@s.whatsapp.net"
+      refute jid =~ ":"
+    end
+  end
+
   describe "build_iq/2" do
     test "errors with no protocols" do
       assert {:error, :no_protocols} = USync.new() |> USync.build_iq()

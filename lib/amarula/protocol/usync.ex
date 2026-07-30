@@ -26,6 +26,7 @@ defmodule Amarula.Protocol.USync do
       #=> %{list: [%{"devices" => ..., id: "1234@s.whatsapp.net"}], side_list: []}
   """
 
+  alias Amarula.Protocol.Binary.JID
   alias Amarula.Protocol.Binary.Node
   alias Amarula.Protocol.Binary.NodeUtils
   alias Amarula.Protocol.Crypto.Constants
@@ -86,10 +87,33 @@ defmodule Amarula.Protocol.USync do
     %{q | protocols: ps ++ [protocol]}
   end
 
-  @doc "Append a user to look up."
+  @doc """
+  Append a user to look up.
+
+  An `%{id: jid}` user is normalized to its **account-level** jid (device stripped).
+  USync is a user→devices lookup, so a device-suffixed `<user jid>` makes the server
+  drop the *whole* query with no reply — one bad jid times out every other lookup in
+  the same batch. Normalizing here rather than at each call site means a caller
+  holding a device-bearing address (`msg.from`, our own `me.id`) can't reintroduce
+  that (#49). A jid that doesn't decode is passed through untouched, so malformed
+  input stays visible instead of collapsing to an empty user entry.
+  """
   @spec with_user(t(), user()) :: t()
+  def with_user(%__MODULE__{users: us} = q, %{id: jid} = user) when is_binary(jid) do
+    %{q | users: us ++ [%{user | id: normalize_user_jid(jid)}]}
+  end
+
   def with_user(%__MODULE__{users: us} = q, user) when is_map(user) do
     %{q | users: us ++ [user]}
+  end
+
+  # jid_normalized_user/1 yields "" for a jid it can't decode; keep the original in
+  # that case rather than sending an empty <user jid>.
+  defp normalize_user_jid(jid) do
+    case JID.jid_normalized_user(jid) do
+      "" -> jid
+      normalized -> normalized
+    end
   end
 
   @doc """
