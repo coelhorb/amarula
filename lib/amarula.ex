@@ -926,9 +926,9 @@ defmodule Amarula do
 
   def resolve_quoted(conn, %Amarula.Msg{quoted: q} = msg) do
     key = %Proto.MessageKey{
-      remoteJid: Amarula.Address.to_jid!(q.channel || msg.channel),
+      remoteJid: key_jid(q.channel || msg.channel),
       id: q.id,
-      participant: q.from && Amarula.Address.to_jid!(q.from)
+      participant: q.from && key_jid(q.from)
     }
 
     case GenServer.call(conn, {:request_resend, key}, @send_call_timeout) do
@@ -1265,20 +1265,48 @@ defmodule Amarula do
   # encoders need. A %Amarula.Msg{} carries everything (chat, sender, id, fromMe);
   # a {jid, msg_id} tuple builds the minimal key (no participant/fromMe known).
   defp message_key(%Amarula.Msg{} = msg) do
-    jid = Amarula.Address.to_jid!(msg.channel)
+    jid = key_jid(msg.channel)
 
     key = %Proto.MessageKey{
       remoteJid: jid,
       id: msg.id,
       fromMe: msg.from_me,
-      participant: msg.from && Amarula.Address.to_jid!(msg.from)
+      participant: msg.from && key_jid(msg.from)
     }
 
     {jid, key}
   end
 
   defp message_key({jid, msg_id}) when is_binary(msg_id) do
-    jid = Amarula.Address.to_jid!(jid)
+    jid = key_jid(jid)
     {jid, %Proto.MessageKey{remoteJid: jid, id: msg_id, fromMe: false}}
+  end
+
+  # A jid as it appears in a `%Proto.MessageKey{}`: ACCOUNT-level, never
+  # device-bearing.
+  #
+  # A message key is an address — `(chat, fromMe, id)` plus `participant` in a group
+  # — and every client normalizes those fields on decode, so a device suffix names a
+  # participant nobody else agrees on and the key matches no message. Baileys does
+  # this in `processMessage` (`message.key.participant =
+  # jidNormalizedUser(...)`, `Utils/process-message.ts`).
+  #
+  # This matters because `msg.from` carries the sending device BY DESIGN (it is the
+  # writer identity — see `Amarula.Msg`), so the library itself hands consumers a
+  # device-bearing address, and the obvious call
+  # `Amarula.send_reaction(conn, msg, "\u{1F44D}")` fed it straight into
+  # `participant`. Group reactions/edits/pins aimed at anyone writing from a linked
+  # device silently pointed at nothing.
+  #
+  # `remoteJid` goes through the same helper: `msg.channel` is already account-level
+  # (#41), but a caller passing a device-bearing chat jid in the `{jid, msg_id}` form
+  # would otherwise reintroduce it. Idempotent for group jids.
+  defp key_jid(jid_or_address) do
+    jid = Amarula.Address.to_jid!(jid_or_address)
+
+    case Amarula.Protocol.Binary.JID.jid_normalized_user(jid) do
+      "" -> jid
+      normalized -> normalized
+    end
   end
 end
