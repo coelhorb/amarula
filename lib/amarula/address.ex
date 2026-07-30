@@ -162,12 +162,23 @@ defmodule Amarula.Address do
   defp kind_of("g.us"), do: :group
   defp kind_of(_), do: nil
 
-  # The user part of a bare id or full jid (strip @server and any device).
+  # The user part of a bare id or full jid: strip @server, then the `:device` and
+  # `_agent` segments, in that order.
+  #
+  # A jid encodes as `user_agent:device@server` (`JID.encode/1`), so the split order
+  # mirrors `JID.decode_user_part/2` → `decode_user_agent/3` — which is the point:
+  # `parse/1` goes through `JID.decode/1` and drops the agent, so a `user_of/1` that
+  # kept it made `pn/1` and `parse/1` disagree on the SAME jid string, leaving
+  # `same_account?/2` false for one account (#51). `same_account?/2` backs
+  # `own_account?/2`, `own_chat?/2` and `own_sender?/3`, so the two constructors have
+  # to agree.
   defp user_of(value) do
     value
     |> String.split("@", parts: 2)
     |> hd()
     |> String.split(":", parts: 2)
+    |> hd()
+    |> String.split("_", parts: 2)
     |> hd()
   end
 end

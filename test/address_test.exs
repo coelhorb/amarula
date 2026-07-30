@@ -27,6 +27,73 @@ defmodule Amarula.AddressTest do
     end
   end
 
+  describe "constructors agree with parse/1 on every jid form (#51)" do
+    # `parse/1` goes through `JID.decode/1`, which splits `user_agent:device`. The
+    # bare constructors go through `user_of/1`. If the two disagree on any form, the
+    # SAME jid string yields two Addresses that `same_account?/2` calls different
+    # accounts — and that predicate backs `own_account?/2`, `own_chat?/2` and
+    # `own_sender?/3` (the spoof gate for self-only protocolMessages).
+    test "an agent-suffixed jid strips the agent in both paths" do
+      jid = "1234_1@s.whatsapp.net"
+
+      assert %Address{user: "1234", kind: :pn, device: nil} = Address.pn(jid)
+      assert Address.pn(jid) == Address.parse(jid)
+      assert Address.same_account?(Address.pn(jid), Address.parse(jid))
+    end
+
+    test "agent and device together" do
+      jid = "1234_1:29@s.whatsapp.net"
+
+      # The constructor is account-level by definition, so it drops the device too;
+      # parse/1 keeps it. They must still name the same ACCOUNT.
+      assert %Address{user: "1234", device: nil} = Address.pn(jid)
+      assert %Address{user: "1234", device: 29} = Address.parse(jid)
+      assert Address.same_account?(Address.pn(jid), Address.parse(jid))
+    end
+
+    test "an agent-suffixed LID agrees too" do
+      jid = "147451226890315_1@lid"
+
+      assert %Address{user: "147451226890315", kind: :lid} = Address.lid(jid)
+      assert Address.lid(jid) == Address.parse(jid)
+    end
+
+    # Full jids only: the constructors also accept a BARE id ("5511999999999"), but
+    # `parse/1` needs a server to determine `kind` and returns nil for one. That's a
+    # documented difference in accepted input, not a disagreement about a jid.
+    test "every pn/lid/group jid form: constructor == parse (modulo device)" do
+      forms = [
+        {&Address.pn/1, "5511999999999@s.whatsapp.net"},
+        {&Address.pn/1, "5511999999999:29@s.whatsapp.net"},
+        {&Address.pn/1, "5511999999999_1@s.whatsapp.net"},
+        {&Address.pn/1, "5511999999999_1:29@s.whatsapp.net"},
+        {&Address.lid/1, "147451226890315@lid"},
+        {&Address.lid/1, "147451226890315:12@lid"},
+        {&Address.lid/1, "147451226890315_1@lid"},
+        {&Address.group/1, "120363000000000000@g.us"}
+      ]
+
+      for {ctor, jid} <- forms do
+        built = ctor.(jid)
+        parsed = Address.parse(jid)
+
+        assert built.user == parsed.user,
+               "user mismatch for #{jid}: constructor #{inspect(built.user)} vs parse #{inspect(parsed.user)}"
+
+        assert built.kind == parsed.kind, "kind mismatch for #{jid}"
+
+        assert Address.same_account?(built, parsed),
+               "same_account?/2 false for #{jid}: #{inspect(built)} vs #{inspect(parsed)}"
+      end
+    end
+
+    test "an underscore-free jid is unaffected" do
+      jid = "5511999999999@s.whatsapp.net"
+      assert %Address{user: "5511999999999"} = Address.pn(jid)
+      assert Address.pn(jid) == Address.parse(jid)
+    end
+  end
+
   describe "parse/1" do
     test "pn / lid / group / device" do
       assert %Address{user: "5511", kind: :pn, device: nil} =

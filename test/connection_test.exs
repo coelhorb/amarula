@@ -737,6 +737,101 @@ defmodule Amarula.ConnectionTest do
     end
   end
 
+  describe "build_msg/6 — embedded reply keys are remapped to our perspective (#47)" do
+    alias Amarula.Address
+    alias Amarula.Protocol.Proto
+
+    @me_pn "5511999999999@s.whatsapp.net"
+    @me_lid "147451226890315@lid"
+    @other "5511888888888@s.whatsapp.net"
+    @group "123456789@g.us"
+    @state %{auth_creds: %{me: %{id: @me_pn, lid: @me_lid}}}
+    @own Address.parse(@me_pn)
+
+    defp reply_node(attrs), do: %Node{tag: "message", attrs: attrs, content: nil}
+
+    defp reaction(target_key) do
+      %Proto.Message{
+        reactionMessage: %Proto.Message.ReactionMessage{key: target_key, text: "👍"}
+      }
+    end
+
+    test "a DM peer reacting to OUR message: remoteJid → the chat, fromMe → true" do
+      # The peer's key names the chat as THEY see it — remoteJid is US, and from
+      # their side our message is not theirs (fromMe: false). Fed straight back
+      # unremapped, the reaction would target ourselves (the #47 bug).
+      target = %Proto.MessageKey{remoteJid: @me_pn, id: "T1", fromMe: false}
+      node = reply_node(%{"from" => @other, "id" => "R1"})
+
+      msg = Connection.build_msg(@state, reaction(target), node, @other, "R1", @own)
+
+      # Remapped to OUR perspective: the chat is the peer, and the reacted-to
+      # message WAS ours.
+      assert msg.content.key == {@other, "T1", true}
+    end
+
+    test "a DM peer reacting to THEIR OWN message: fromMe → false" do
+      target = %Proto.MessageKey{remoteJid: @me_pn, id: "T2", fromMe: true}
+      node = reply_node(%{"from" => @other, "id" => "R2"})
+
+      msg = Connection.build_msg(@state, reaction(target), node, @other, "R2", @own)
+
+      assert msg.content.key == {@other, "T2", false}
+    end
+
+    test "our own reaction (from_me carrier) is left untouched — already our perspective" do
+      # A fan-out of a reaction we sent: the embedded key is already correct.
+      target = %Proto.MessageKey{remoteJid: @other, id: "T3", fromMe: false}
+      node = reply_node(%{"from" => @me_pn, "recipient" => @other, "id" => "R3"})
+
+      msg = Connection.build_msg(@state, reaction(target), node, @me_pn, "R3", @own)
+
+      assert msg.from_me
+      assert msg.content.key == {@other, "T3", false}
+    end
+
+    test "a group reaction: remoteJid → the group, target author preserved as participant" do
+      # In a group the key is identical from every perspective (why #41/#47 masked
+      # here), but the target author must survive so a re-reaction addresses the
+      # right message.
+      author = "5511777777777@s.whatsapp.net"
+      target = %Proto.MessageKey{remoteJid: @group, id: "T4", fromMe: false, participant: author}
+      node = reply_node(%{"from" => @group, "participant" => @other, "id" => "R4"})
+
+      msg = Connection.build_msg(@state, reaction(target), node, @group, "R4", @own)
+
+      assert msg.content.key == {@group, "T4", false, author}
+    end
+
+    test "fromMe is recomputed against our LID too (not just our PN)" do
+      # The peer's key can name us by our LID. own_account?/2 checks both.
+      target = %Proto.MessageKey{remoteJid: @me_lid, id: "T5", fromMe: false}
+      node = reply_node(%{"from" => @other, "id" => "R5"})
+
+      msg = Connection.build_msg(@state, reaction(target), node, @other, "R5", @own)
+
+      assert msg.content.key == {@other, "T5", true}
+    end
+
+    test "an inbound edit (protocolMessage key) is remapped too" do
+      target = %Proto.MessageKey{remoteJid: @me_pn, id: "E1", fromMe: true}
+
+      proto = %Proto.Message{
+        protocolMessage: %Proto.Message.ProtocolMessage{
+          type: :MESSAGE_EDIT,
+          key: target,
+          editedMessage: %Proto.Message{conversation: "fixed"}
+        }
+      }
+
+      node = reply_node(%{"from" => @other, "id" => "E1"})
+      msg = Connection.build_msg(@state, proto, node, @other, "E1", @own)
+
+      assert msg.type == :edit
+      assert msg.content.key == {@other, "E1", false}
+    end
+  end
+
   describe "own_sender?/3 — gate for self-only protocolMessage types (CVE-2026-48063)" do
     alias Amarula.Address
 

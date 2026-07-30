@@ -492,7 +492,9 @@ defmodule Amarula.Protocol.Messages.ConversationSender do
     # USync is a user→devices lookup: the <user jid> must be the bare user jid,
     # never device-suffixed (our own me.id carries our companion device, e.g.
     # :29). A device-suffixed jid makes the server drop the whole query with no
-    # reply → timeout. Normalize + dedup.
+    # reply → timeout. `USync.with_user/2` also normalizes now (#49), but keep it
+    # here: the `uniq` below has to run on the NORMALIZED forms, or two devices of
+    # one user survive as two query entries.
     normalized = users |> Enum.map(&JID.jid_normalized_user/1) |> Enum.uniq()
 
     query =

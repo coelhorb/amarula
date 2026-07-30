@@ -5,6 +5,72 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.5] - 2026-07-30
+
+### Fixed
+
+- **Reactions / edits / deletes / votes now address the right message when the
+  peer wrote from a linked device** ([#46], [#47]). Two related defects in how a
+  message key crosses the API — same shape as [#41].
+
+  *Received keys were in the sender's perspective* ([#47]). A reaction / poll /
+  edit / pin / keep you receive embeds a key naming its target **as the sender
+  sees the chat** — in a 1:1 DM that means `remoteJid` is *your* jid and `fromMe`
+  is false-from-their-side. `Amarula.Msg` documents such a key as safe to feed
+  straight to `send_reaction/3`, but doing so pointed the reaction at *yourself*
+  (it landed in your self-chat instead of going back to the peer). Groups masked
+  it — a group jid is identical from every perspective. `Connection` now remaps
+  every embedded key to your perspective before you see it (as Baileys'
+  `normaliseKey` does): `remoteJid` becomes the chat as you see it, `fromMe` is
+  recomputed against your own account (both PN *and* LID), and the target's author
+  is preserved as `participant`.
+
+  *The reference could not carry `from_me`* ([#46]). `send_edit` / `send_revoke` /
+  `pin_message` / `keep_message` act on **your own** messages, but the
+  `{jid, msg_id}` reference hardcoded `fromMe: false`, so the edit / revoke
+  silently matched nothing (the payload is end-to-end encrypted, so the server
+  cannot reject it — no error surfaces). References now carry `from_me`; see
+  **Changed**.
+
+- **Poll votes now derive their key from account-level identities** ([#48]). The
+  vote key is derived from the creator and voter jids; a device (`:29`) or agent
+  (`_1`) segment on either made each side derive a different key, so the vote
+  decrypted to nothing and silently never counted — in 1:1 and group polls alike.
+  `PollCrypto` now normalizes the device / agent segment at the crypto boundary
+  (the PN/LID choice is deliberately preserved — a LID group votes on the LID).
+
+- **`Contacts.fetch_status/2` no longer drops the query for a device-suffixed
+  jid** ([#49]). A `<usync>` user jid must be account-level; a device suffix made
+  the server drop the whole query. `USync.with_user/2` now normalizes it at the
+  boundary, so no caller can reintroduce it.
+
+- **`Address.same_account?/2` is no longer false for one identity written two
+  ways** ([#51]). `Address.pn/1` stripped an agent segment (`user_1@…`) but
+  `Address.parse/1` did not, so the two disagreed and `same_account?/2` returned
+  false for what is a single identity. `parse/1` now strips the agent segment too.
+
+### Changed
+
+- **A message reference (`t:Amarula.message_ref/0`) now carries `from_me`.** A
+  received `key` / `poll_key` — and a reference you build by hand — is now
+  `{jid, msg_id, from_me}` (with an optional 4th `participant` for a group target),
+  not the old `{jid, msg_id}` 2-tuple. Carrying `from_me` in the value is what lets
+  a reaction / edit / vote address the right message ([#46], [#47]).
+
+  The bare `{jid, msg_id}` 2-tuple **still works** but is **deprecated**: it emits
+  a warning and assumes a per-operation default `from_me` (`true` for the
+  self-directed `send_edit` / `send_revoke` / `pin_message` / `keep_message`,
+  `false` elsewhere). If you only pass a received `key` straight back to a `send_*`
+  helper — the documented pattern — nothing changes. Two cases do need an update:
+  a reference you build by hand (pass the explicit 3-tuple), and code that
+  *pattern-matches* the tuple (`{jid, id} = reaction.key` → `{jid, id, from_me}`).
+
+[#46]: https://github.com/tubedude/amarula/issues/46
+[#47]: https://github.com/tubedude/amarula/issues/47
+[#48]: https://github.com/tubedude/amarula/issues/48
+[#49]: https://github.com/tubedude/amarula/issues/49
+[#51]: https://github.com/tubedude/amarula/issues/51
+
 ## [0.5.4] - 2026-07-29
 
 ### Fixed
@@ -948,7 +1014,8 @@ First public release.
   the supervision tree down and frees the profile slot). The server-side
   device-unlink now lives only in `wipe_credentials/1`.
 
-[Unreleased]: https://github.com/tubedude/amarula/compare/v0.5.4...HEAD
+[Unreleased]: https://github.com/tubedude/amarula/compare/v0.5.5...HEAD
+[0.5.5]: https://github.com/tubedude/amarula/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/tubedude/amarula/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/tubedude/amarula/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/tubedude/amarula/compare/v0.5.1...v0.5.2

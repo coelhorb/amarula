@@ -81,6 +81,104 @@ defmodule Amarula.Protocol.Messages.PollTest do
     end
   end
 
+  describe "vote identities are account-level (#48)" do
+    # The existing round-trips above encrypt and decrypt with the SAME jid strings,
+    # so they pass for any consistent pair — correct or not. These derive the
+    # recipient's side independently, the way a real peer does: a recipient never
+    # sees our device, so it keys on the account-level jid (Baileys derives every
+    # poll identity through `jidNormalizedUser`).
+    @poll_id "POLL123"
+    @creator "10000000001@s.whatsapp.net"
+    @voter_account "10000000009@s.whatsapp.net"
+    # `Amarula.own_address/1` carries THIS companion's device — the form that was
+    # reaching the key derivation.
+    @voter_device "10000000009:29@s.whatsapp.net"
+
+    defp ctx(secret, creator, voter) do
+      %{
+        message_secret: secret,
+        poll_msg_id: @poll_id,
+        poll_creator_jid: creator,
+        voter_jid: voter
+      }
+    end
+
+    defp vote_for(secret, creator, voter, option) do
+      hash = :crypto.hash(:sha256, option)
+      {PollCrypto.encrypt_vote([hash], ctx(secret, creator, voter)), hash}
+    end
+
+    test "a vote encrypted with our device-bearing jid is readable by a recipient" do
+      # THE REGRESSION. Encrypt as the sender does (device-bearing `own_address`),
+      # decrypt as a recipient does (account-level). These must agree.
+      {_poll, secret} = MessageEncoder.poll("Best?", ["Cats", "Dogs"], selectable: 1)
+      {enc, dogs} = vote_for(secret, @creator, @voter_device, "Dogs")
+
+      assert {:ok, decoded} = PollCrypto.decrypt_vote(enc, ctx(secret, @creator, @voter_account))
+      assert decoded.selectedOptions == [dogs]
+    end
+
+    test "and the reverse: a peer's account-level vote is readable if we hold a device form" do
+      {_poll, secret} = MessageEncoder.poll("Best?", ["Cats", "Dogs"], selectable: 1)
+      {enc, dogs} = vote_for(secret, @creator, @voter_account, "Dogs")
+
+      assert {:ok, decoded} = PollCrypto.decrypt_vote(enc, ctx(secret, @creator, @voter_device))
+      assert decoded.selectedOptions == [dogs]
+    end
+
+    test "a device-bearing creator is normalized too (both identities key the vote)" do
+      {_poll, secret} = MessageEncoder.poll("Best?", ["Cats", "Dogs"], selectable: 1)
+      creator_device = "10000000001:7@s.whatsapp.net"
+      {enc, dogs} = vote_for(secret, creator_device, @voter_account, "Dogs")
+
+      assert {:ok, decoded} = PollCrypto.decrypt_vote(enc, ctx(secret, @creator, @voter_account))
+      assert decoded.selectedOptions == [dogs]
+    end
+
+    test "an agent segment is stripped as well" do
+      {_poll, secret} = MessageEncoder.poll("Best?", ["Cats", "Dogs"], selectable: 1)
+      {enc, dogs} = vote_for(secret, @creator, "10000000009_1@s.whatsapp.net", "Dogs")
+
+      assert {:ok, decoded} = PollCrypto.decrypt_vote(enc, ctx(secret, @creator, @voter_account))
+      assert decoded.selectedOptions == [dogs]
+    end
+
+    test "the whole path: MessageEncoder.poll_vote/5 with a device-bearing voter" do
+      {_poll, secret} = MessageEncoder.poll("Best?", ["Cats", "Dogs"], selectable: 1)
+      poll_key = %Proto.MessageKey{remoteJid: "g@g.us", id: @poll_id, fromMe: false}
+
+      message = MessageEncoder.poll_vote(poll_key, @creator, @voter_device, secret, ["Dogs"])
+
+      assert {:ok, decoded} =
+               PollCrypto.decrypt_vote(
+                 message.pollUpdateMessage.vote,
+                 ctx(secret, @creator, @voter_account)
+               )
+
+      assert decoded.selectedOptions == [:crypto.hash(:sha256, "Dogs")]
+    end
+
+    test "PN and LID stay distinct — normalization must not conflate identities" do
+      # Device/agent are spellings of one identity; PN vs LID are two identities.
+      # Stripping must not accidentally make these interchangeable.
+      {_poll, secret} = MessageEncoder.poll("Best?", ["Cats", "Dogs"], selectable: 1)
+      {enc, _} = vote_for(secret, @creator, "10000000009@lid", "Dogs")
+
+      assert {:error, _} = PollCrypto.decrypt_vote(enc, ctx(secret, @creator, @voter_account))
+    end
+
+    test "an undecodable jid is kept as-is rather than blanked" do
+      # "" would derive a plausible-but-wrong key on both sides and silently agree,
+      # hiding a caller's bad input. Keeping the original keeps the mismatch visible.
+      {_poll, secret} = MessageEncoder.poll("Best?", ["Cats", "Dogs"], selectable: 1)
+      {enc, dogs} = vote_for(secret, @creator, "not-a-jid", "Dogs")
+
+      assert {:ok, decoded} = PollCrypto.decrypt_vote(enc, ctx(secret, @creator, "not-a-jid"))
+      assert decoded.selectedOptions == [dogs]
+      assert {:error, _} = PollCrypto.decrypt_vote(enc, ctx(secret, @creator, ""))
+    end
+  end
+
   describe "MessageEncoder.poll_vote/5 (send a vote)" do
     test "builds a pollUpdateMessage whose vote our own decrypt + tally recovers" do
       {poll_msg, secret} = MessageEncoder.poll("Best?", ["Cats", "Dogs"], selectable: 1)
