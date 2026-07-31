@@ -52,16 +52,19 @@ defmodule Amarula.Protocol.Socket.ReceiveFlowTest do
     dir = Path.join(System.tmp_dir!(), "amarula_recvflow_#{System.unique_integer([:positive])}")
     on_exit(fn -> File.rm_rf(dir) end)
 
-    config = %{
-      wa_websocket_url: "wss://test.example.com/ws",
-      max_retries: 1,
-      retry_delay: 100,
-      connection_state: :connected,
-      frame_sink: self(),
-      profile: :"recv_#{System.unique_integer([:positive])}",
-      storage: {Amarula.Storage.File, root: dir},
-      auth: creds(context[:creds_opts] || [])
-    }
+    config =
+      %{
+        wa_websocket_url: "wss://test.example.com/ws",
+        max_retries: 1,
+        retry_delay: 100,
+        connection_state: :connected,
+        frame_sink: self(),
+        profile: :"recv_#{System.unique_integer([:positive])}",
+        storage: {Amarula.Storage.File, root: dir},
+        auth: creds(context[:creds_opts] || [])
+      }
+      # Per-test connect-time flag overrides (e.g. `@tag config: %{sync_app_state: false}`).
+      |> Map.merge(context[:config] || %{})
 
     # Real per-instance sender supervisor under the app-level InstanceRegistry, so
     # the retry-resend path (`deliver_async` → per-recipient ConversationSender)
@@ -468,6 +471,29 @@ defmodule Amarula.Protocol.Socket.ReceiveFlowTest do
       assert Process.alive?(ctx.pid)
     end
 
+    @tag config: %{sync_app_state: false}
+    test "server_sync with sync_app_state: false acks but sends no resync IQ (#59)", ctx do
+      node =
+        Node.create(
+          "notification",
+          %{"type" => "server_sync", "from" => @server, "id" => "N1b"},
+          [
+            Node.create("collection", %{"name" => "regular_high"}, nil)
+          ]
+        )
+
+      inject(ctx, node)
+
+      # Still acked — we don't want the server to think the notification was lost.
+      ack = recv_frame()
+      assert ack.tag == "ack"
+      assert attr(ack, "type") == "server_sync"
+
+      # ...but no app-state resync IQ follows.
+      refute_receive {:frame_out, %Node{tag: "iq"}}, 200
+      assert Process.alive?(ctx.pid)
+    end
+
     test "encrypt from the server with a low count: uploads fresh prekeys", ctx do
       node =
         Node.create("notification", %{"type" => "encrypt", "from" => @server, "id" => "N2"}, [
@@ -703,6 +729,25 @@ defmodule Amarula.Protocol.Socket.ReceiveFlowTest do
       passive = recv_frame()
       assert passive.tag == "iq"
       assert attr(passive, "xmlns") == "passive"
+
+      assert_receive {:amarula, :connection_update, %{connection: :open}}
+    end
+
+    @tag config: %{fire_init_queries: false}
+    test "fire_init_queries: false skips the post-login init queries (#59)", ctx do
+      inject(ctx, Node.create("success", %{}, nil))
+      count_iq = recv_frame()
+      inject(ctx, count_reply(attr(count_iq, "id"), 500))
+
+      # finish_login frame order: passive active, unified-session <ib>, digest,
+      # [init queries], presence. With init queries OFF the frame right after the
+      # digest IQ is the presence — never the props/blocklist/privacy IQs.
+      assert attr(recv_frame(), "xmlns") == "passive"
+      assert recv_frame().tag == "ib"
+      assert recv_frame().tag == "iq"
+
+      next = recv_frame()
+      assert next.tag == "presence"
 
       assert_receive {:amarula, :connection_update, %{connection: :open}}
     end

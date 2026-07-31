@@ -5,6 +5,25 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Connect-time flags to skip history / app-state sync, for lighter ephemeral
+  connects** ([#59]). Three per-connection settings (each default `true`, so
+  existing behaviour is unchanged):
+  - `:sync_history` — when `false`, still **acks** a pushed history-sync
+    notification (the phone won't show this device as "Paused") but skips the
+    download / decrypt / `:history_sync` emit. Distinct from `:sync_full_history`,
+    which is the pairing-time *depth* knob.
+  - `:sync_app_state` — when `false`, skips app-state resync on
+    `server_sync`/`account_sync`/key-share (no `:chats_update`/`:contacts_update`
+    from app-state). Shared keys are still stored, so re-enabling later works.
+  - `:fire_init_queries` — previously declared but never read (a dead flag); now
+    actually gates the post-login props/blocklist/privacy IQ queries.
+
+[#59]: https://github.com/tubedude/amarula/issues/59
+
 ## [0.5.5] - 2026-07-30
 
 ### Fixed

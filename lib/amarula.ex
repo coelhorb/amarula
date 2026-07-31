@@ -293,7 +293,13 @@ defmodule Amarula do
       version]` triple shown in the user's *Linked devices*. A `"Android"` client
       element opts into **Android registration** (can receive view-once media; see
       `Amarula.Config`).
-    * `:sync_full_history` (default `true`) — request full history on link.
+    * `:sync_full_history` (default `true`) — at pairing, request *full* history vs
+      a recent window (a depth knob; desktop only).
+    * `:sync_history` / `:sync_app_state` / `:fire_init_queries` (each default
+      `true`) — connect-time opt-outs for lighter **ephemeral** connects: skip
+      processing pushed history syncs, skip app-state (chat/contact) resync, and
+      skip the post-login init IQ queries respectively. See the table in
+      `Amarula.Config` for the trade-offs.
     * `:auth` — explicit creds (advanced; normally Amarula loads/persists these for
       you from `:profile`).
     * `:offline` (default `false`) — sandbox mode (below).
