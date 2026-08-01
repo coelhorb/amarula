@@ -25,8 +25,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   option is snake_case `:file_name`, but the document builder only read `:fileName`
   — so `documentMessage.fileName` was always `nil` and every document arrived
   untitled. Both spellings are accepted now.
+- **Three `send_media/5` options were unreachable and now work** ([#62]). The
+  builders read `:gifPlayback`, `:isAnimated` and `:pageCount`, but `send_media/5`
+  validates against a strict schema that **rejects unknown keys** — so the only
+  spelling the builder accepted was the one the validator refused. Sending an
+  animated-GIF video, an animated sticker, or a document page count was impossible
+  through the public API. Same root cause as the `:file_name` bug above: the public
+  API is snake_case while the generated protos are camelCase.
+
+### Added
+
+- **`:gif_playback`, `:is_animated` and `:page_count` options on `send_media/5`**
+  ([#62]) — play a video as a looping GIF, mark a sticker animated, and set a
+  document's page count. Builders now name only public snake_case options and a
+  single mapping translates to the proto field, so a documented option can't
+  silently miss its field again; a test asserts every documented option lands.
 
 [#61]: https://github.com/tubedude/amarula/pull/61
+[#62]: https://github.com/tubedude/amarula/issues/62
 
 ## [0.5.5] - 2026-07-30
 

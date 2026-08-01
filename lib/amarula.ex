@@ -1171,6 +1171,18 @@ defmodule Amarula do
                        ],
                        file_name: [type: :string, doc: "document file name."],
                        title: [type: :string, doc: "document title."],
+                       page_count: [
+                         type: :non_neg_integer,
+                         doc: "for `:document`, number of pages (shown on the preview card)."
+                       ],
+                       gif_playback: [
+                         type: :boolean,
+                         doc: "for `:video`, play as a looping GIF (no audio, autoplay)."
+                       ],
+                       is_animated: [
+                         type: :boolean,
+                         doc: "for `:sticker`, mark the sticker as animated."
+                       ],
                        view_once: [
                          type: :boolean,
                          doc: "send as view-once (the recipient can open it once)."

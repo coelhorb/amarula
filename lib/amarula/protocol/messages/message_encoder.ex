@@ -310,7 +310,9 @@ defmodule Amarula.Protocol.Messages.MessageEncoder do
   `:sticker`) from an `encrypt`+`upload` result. `info` carries the uploaded
   `:url`/`:direct_path`, the encrypt result (`:media_key`, `:file_sha256`,
   `:file_enc_sha256`, `:file_length`) and `:mimetype`. `opts` adds per-type extras
-  (`:caption`, `:width`, `:height`, `:seconds`, `:ptt`, `:file_name`, `:title`).
+  (`:caption`, `:width`, `:height`, `:seconds`, `:ptt`, `:waveform`, `:file_name`,
+  `:title`, `:page_count`, `:gif_playback`, `:is_animated`) — always the **public
+  snake_case** names; `take/2` maps them to their camelCase proto fields.
   """
   @spec media(:image | :video | :audio | :document | :sticker, map(), keyword()) ::
           Proto.Message.t()
@@ -408,7 +410,7 @@ defmodule Amarula.Protocol.Messages.MessageEncoder do
       videoMessage:
         struct(
           Proto.Message.VideoMessage,
-          Map.merge(common, take(opts, [:caption, :width, :height, :seconds, :gifPlayback]))
+          Map.merge(common, take(opts, [:caption, :width, :height, :seconds, :gif_playback]))
         )
     }
   end
@@ -435,16 +437,11 @@ defmodule Amarula.Protocol.Messages.MessageEncoder do
   end
 
   defp media_message(:document, common, opts) do
-    # accept the documented snake_case option (`file_name`, amarula.ex @send_media_opts)
-    # as well as the proto-cased key — the public API name silently produced a
-    # documentMessage with NO fileName, which clients render as "Untitled"
-    opts = Keyword.put_new(opts, :fileName, Keyword.get(opts, :file_name))
-
     %Proto.Message{
       documentMessage:
         struct(
           Proto.Message.DocumentMessage,
-          Map.merge(common, take(opts, [:title, :fileName, :pageCount]))
+          Map.merge(common, take(opts, [:title, :file_name, :page_count]))
         )
     }
   end
@@ -454,14 +451,29 @@ defmodule Amarula.Protocol.Messages.MessageEncoder do
       stickerMessage:
         struct(
           Proto.Message.StickerMessage,
-          Map.merge(common, take(opts, [:width, :height, :isAnimated]))
+          Map.merge(common, take(opts, [:width, :height, :is_animated]))
         )
     }
   end
 
   # Pull the given keys from opts into a map, dropping absent ones.
+  # Public option (snake_case, Elixir convention) → proto field (camelCase, generated
+  # from WhatsApp's schema). Builders name the PUBLIC key and `take/2` translates, so
+  # a documented option can never miss its field: naming the proto field directly is
+  # what silently dropped `file_name` (#61) and made `gifPlayback`/`isAnimated`/
+  # `pageCount` unreachable — `NimbleOptions.validate!` rejects the camelCase spelling
+  # those builders were reading (#62). Guarded by the option-coverage test.
+  @proto_field %{
+    file_name: :fileName,
+    gif_playback: :gifPlayback,
+    is_animated: :isAnimated,
+    page_count: :pageCount
+  }
+
   defp take(opts, keys) do
-    for k <- keys, (v = Keyword.get(opts, k)) != nil, into: %{}, do: {k, v}
+    for k <- keys, (v = Keyword.get(opts, k)) != nil, into: %{} do
+      {Map.get(@proto_field, k, k), v}
+    end
   end
 
   @doc """

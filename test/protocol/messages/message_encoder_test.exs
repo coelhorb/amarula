@@ -475,6 +475,60 @@ defmodule Amarula.Protocol.Messages.MessageEncoderTest do
       assert MessageEncoder.media(:sticker, @info).stickerMessage.url == "https://x/y"
     end
 
+    # The public API is snake_case; the generated protos are camelCase. A builder
+    # that names the proto field directly silently drops the documented option
+    # (`file_name`, #61) — or, since `NimbleOptions.validate!` rejects unknown keys,
+    # makes it unreachable (`gifPlayback`/`isAnimated`/`pageCount`, #62). One row per
+    # documented `@send_media_opts` option that lands on a per-type proto field: if a
+    # future rename breaks the mapping, this fails instead of the option vanishing.
+    # Rows are {media type, PUBLIC option, value, proto message field, PROTO field} —
+    # plain atoms so the pairs can be generated into tests (a closure can't be).
+    @option_lands_on [
+      {:image, :caption, "hi", :imageMessage, :caption},
+      {:image, :width, 10, :imageMessage, :width},
+      {:image, :height, 20, :imageMessage, :height},
+      {:video, :caption, "cap", :videoMessage, :caption},
+      {:video, :seconds, 3, :videoMessage, :seconds},
+      {:video, :gif_playback, true, :videoMessage, :gifPlayback},
+      {:audio, :seconds, 5, :audioMessage, :seconds},
+      {:audio, :ptt, true, :audioMessage, :ptt},
+      {:audio, :waveform, <<1, 2>>, :audioMessage, :waveform},
+      {:document, :title, "t", :documentMessage, :title},
+      {:document, :file_name, "invoice.pdf", :documentMessage, :fileName},
+      {:document, :page_count, 7, :documentMessage, :pageCount},
+      {:sticker, :width, 512, :stickerMessage, :width},
+      {:sticker, :is_animated, true, :stickerMessage, :isAnimated}
+    ]
+
+    for {type, opt, value, msg_field, proto_field} <- @option_lands_on do
+      test "#{type}: the documented :#{opt} option reaches #{msg_field}.#{proto_field} (#62)" do
+        value = unquote(Macro.escape(value))
+        msg = MessageEncoder.media(unquote(type), @info, [{unquote(opt), value}])
+
+        assert msg
+               |> Map.fetch!(unquote(msg_field))
+               |> Map.fetch!(unquote(proto_field)) == value
+      end
+    end
+
+    test "every option a builder reads is accepted by the public validator (#62)" do
+      # The inverse guard, through the REAL public entry point: `send_media/5` runs
+      # `NimbleOptions.validate!` BEFORE any GenServer call, and it rejects unknown
+      # keys. So an option a builder reads but the schema omits is unreachable — the
+      # #62 bug. Calling against a dead pid, a DOCUMENTED option gets past validation
+      # and then exits (:noproc); an UNDOCUMENTED one raises ValidationError first,
+      # which `catch_exit` does not catch, so the test fails loudly.
+      conn = dead_pid()
+
+      for {type, opt, value, _msg_field, _proto_field} <- @option_lands_on do
+        assert catch_exit(
+                 Amarula.send_media(conn, "5511999999999@s.whatsapp.net", type, <<1>>, [
+                   {opt, value}
+                 ])
+               )
+      end
+    end
+
     test "audio threads :seconds and :waveform (#2646)" do
       audio = MessageEncoder.media(:audio, @info, seconds: 42, waveform: <<1, 2, 3>>).audioMessage
       assert audio.seconds == 42
@@ -534,6 +588,19 @@ defmodule Amarula.Protocol.Messages.MessageEncoderTest do
     test "rejects non-float coordinates" do
       # apply/3 keeps the type checker from flagging the deliberately-bad call
       assert_raise FunctionClauseError, fn -> apply(MessageEncoder, :location, [1, 2]) end
+    end
+  end
+
+  # A pid that is guaranteed dead, so `GenServer.call` exits immediately with
+  # :noproc instead of blocking on the 90s send timeout.
+  defp dead_pid do
+    pid = spawn(fn -> :ok end)
+    ref = Process.monitor(pid)
+
+    receive do
+      {:DOWN, ^ref, :process, ^pid, _} -> pid
+    after
+      1000 -> flunk("spawned process did not exit")
     end
   end
 end
