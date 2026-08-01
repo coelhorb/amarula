@@ -61,6 +61,26 @@ defmodule Amarula.ConnectionTest do
     end
   end
 
+  describe "connect-time sync opt-outs (#59)" do
+    test "sync_history? defaults true, honors false" do
+      assert Connection.sync_history?(%{})
+      assert Connection.sync_history?(%{sync_history: true})
+      refute Connection.sync_history?(%{sync_history: false})
+    end
+
+    test "sync_app_state? defaults true, honors false" do
+      assert Connection.sync_app_state?(%{})
+      assert Connection.sync_app_state?(%{sync_app_state: true})
+      refute Connection.sync_app_state?(%{sync_app_state: false})
+    end
+
+    test "fire_init_queries? defaults true, honors false" do
+      assert Connection.fire_init_queries?(%{})
+      assert Connection.fire_init_queries?(%{fire_init_queries: true})
+      refute Connection.fire_init_queries?(%{fire_init_queries: false})
+    end
+  end
+
   describe "connection manager lifecycle" do
     test "starts and initializes correctly" do
       # Use a tmp-rooted profile so the connection never touches the repo's data

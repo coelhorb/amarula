@@ -26,9 +26,11 @@ defmodule Amarula.Config do
   | `:keep_alive_interval_ms` | `30_000` | WA-level keep-alive ping interval |
   | `:sender_idle_ms` | `1_000` | how long a per-recipient `ConversationSender` stays warm after its last send before stopping. Larger = fewer respawns/session re-reads under bursty traffic (useful with a disk-backed store); smaller = sheds processes faster after a fan-out |
   | `:custodian_idle_ms` | `30_000` | how long a per-record `SessionCustodian` (the Signal-session/sender-key lock) stays warm after its last op before shedding. Write-through means an idle-stop loses nothing; the next op restarts it. Larger = fewer respawns/session re-reads for chatty peers; smaller = sheds idle locks faster |
-  | `:sync_full_history` | `true` | request full history on link |
+  | `:sync_full_history` | `true` | at **pairing**, ask the phone for *full* history vs a recent window (desktop only). A *depth* knob — distinct from `:sync_history`, which decides whether history is processed at all. |
+  | `:sync_history` | `true` | process pushed history-sync notifications (download → decrypt → emit `:history_sync`). `false` still **acks** them (so the phone doesn't show this device as "Paused") but skips the download/decrypt/emit — lighter for ephemeral connects that don't need backfill. You then forgo offline-message recovery (see `:history_sync`). |
+  | `:sync_app_state` | `true` | resync app-state (chats/contacts metadata: mute/pin/archive, names) when the server signals a change (`server_sync`/`account_sync`, or a fresh app-state-sync key). `false` skips the resync — no `:chats_update`/`:contacts_update` from app-state — for connects that only send. Shared keys are still stored, so re-enabling later works. |
   | `:mark_online_on_connect` | `true` | send presence-available on connect. `false` keeps this session **unavailable** — it appears offline to others and the **primary phone keeps receiving push notifications** (live messages are then queued offline rather than pushed to this session). |
-  | `:fire_init_queries` | `true` | run the post-login init IQ queries |
+  | `:fire_init_queries` | `true` | run the post-login init IQ queries (props/blocklist/privacy). `false` skips them — one more lever for a minimal ephemeral connect. |
   | `:country_code` | `"US"` | |
   | `:headers` / `:origin` / `:agent` | see defaults | HTTP/WS handshake |
 
@@ -106,6 +108,8 @@ defmodule Amarula.Config do
     fire_init_queries: true,
     mark_online_on_connect: true,
     sync_full_history: true,
+    sync_history: true,
+    sync_app_state: true,
     country_code: "US",
     # http/ws handshake
     headers: [],

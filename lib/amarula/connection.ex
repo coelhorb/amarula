@@ -3289,6 +3289,12 @@ defmodule Amarula.Connection do
   # every other IQ). Fire-and-forget, matching Baileys (it doesn't block sends on
   # the replies). The abt/props hash is omitted on first run (Baileys sends it only
   # when it has a cached lastPropHash).
+  # Gated on `:fire_init_queries` (default true, #59) — a minimal ephemeral connect
+  # can skip the props/blocklist/privacy round-trips.
+  defp maybe_send_init_queries(state) do
+    if fire_init_queries?(state.config), do: send_init_queries(state), else: state
+  end
+
   defp send_init_queries(state) do
     state
     |> send_init_iq(
@@ -3818,7 +3824,9 @@ defmodule Amarula.Connection do
             state
 
           own_sender? ->
-            download_history_sync(state, messages)
+            # Always ack (so the phone doesn't show this device as "Paused"), but
+            # skip the download/decrypt/emit when the consumer opted out (#59).
+            maybe_download_history_sync(state, messages)
             send_hist_sync_receipt(state, node)
 
           true ->
@@ -3930,6 +3938,13 @@ defmodule Amarula.Connection do
   defp history_sync_message?(_), do: false
 
   # Download + decode the history-sync blob(s) these messages reference and emit
+  # Gated on `:sync_history` (default true, #59). When off, skip the download/
+  # decrypt/emit entirely — the caller still sends the hist_sync receipt so the
+  # phone doesn't show this device as "Paused".
+  defp maybe_download_history_sync(state, messages) do
+    if sync_history?(state.config), do: download_history_sync(state, messages), else: state
+  end
+
   # the chats/contacts to the consumer. The download is a network call; run it in
   # a task so the receive path isn't blocked, and emit from there.
   defp download_history_sync(state, messages) do
@@ -4177,15 +4192,22 @@ defmodule Amarula.Connection do
   # we resync just that one (Baileys: resyncAppState([name])) rather than hammer
   # the server with all five.
   defp resync_app_state(state, names \\ Sync.collections()) do
-    collections =
-      Enum.map(names, fn name ->
-        st = load_collection_state(state, name)
-        {name, st.version, st.version == 0}
-      end)
+    # Gated at the function so every trigger (server_sync/account_sync/key-share)
+    # honours the opt-out (#59). Shared keys are still stored upstream, so
+    # re-enabling later works.
+    if sync_app_state?(state.config) do
+      collections =
+        Enum.map(names, fn name ->
+          st = load_collection_state(state, name)
+          {name, st.version, st.version == 0}
+        end)
 
-    iq = Sync.request_iq(collections)
-    # Tracked (not blocking): the reply continues in handle_tracked_iq(:app_state_sync).
-    send_tracked_iq(state, iq, :app_state_sync)
+      iq = Sync.request_iq(collections)
+      # Tracked (not blocking): the reply continues in handle_tracked_iq(:app_state_sync).
+      send_tracked_iq(state, iq, :app_state_sync)
+    else
+      state
+    end
   end
 
   defp apply_app_state_reply(state, reply) do
@@ -4611,7 +4633,7 @@ defmodule Amarula.Connection do
       |> send_passive_iq("active")
       |> send_unified_session()
       |> send_digest_iq()
-      |> send_init_queries()
+      |> maybe_send_init_queries()
       |> maybe_mark_online()
 
     # Emit :open here, on CB:success (after passive 'active' + digest + init
@@ -4645,6 +4667,15 @@ defmodule Amarula.Connection do
   # to `Amarula.new/1`), default true. Public-ish (`@doc false`) so the gate is
   # unit-testable without a live login.
   def mark_online?(config), do: Map.get(config, :mark_online_on_connect, true)
+
+  # Connect-time opt-outs, all default true (see `Amarula.Config`). `@doc false` +
+  # public so each gate is unit-testable without a live login, like `mark_online?/1`.
+  @doc false
+  def sync_history?(config), do: Map.get(config, :sync_history, true)
+  @doc false
+  def sync_app_state?(config), do: Map.get(config, :sync_app_state, true)
+  @doc false
+  def fire_init_queries?(config), do: Map.get(config, :fire_init_queries, true)
 
   # Baileys sendPresenceUpdate('available'): <presence name={me.name} type="available"/>.
   defp send_presence_available(state) do
