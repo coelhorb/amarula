@@ -164,7 +164,7 @@ defmodule Amarula do
   poll votes). One of:
 
     * the `%Amarula.Msg{}` you received (carries its chat, sender, id, `from_me`), or
-    * a received `key`/`poll_key` — an `Amarula.Msg.ref/0`, already remapped to your
+    * a received `key`/`poll_key` — an `t:Amarula.Msg.ref/0`, already remapped to your
       perspective, or
     * a `{jid, msg_id, from_me}` tuple you build for a message you know by id — the
       chat, the message id, and whether *you* sent it (add a 4th `participant` jid
@@ -227,7 +227,7 @@ defmodule Amarula do
       (phone-number pairing)
     * `:pairing_failure`   — `%{reason: String.t()}` pairing could not be completed
       (e.g. a malformed pair-success); the connection then errors out
-    * `:call_update`       — an inbound call event (`Amarula.Protocol.Call.t/0`):
+    * `:call_update`       — an inbound call event (`t:Amarula.Protocol.Call.t/0`):
       `%{chat, from, id, status, timestamp, offline, video?, group?, group_jid}`.
       `status` is `:offer` (ringing), `:terminate`, `:timeout` (unanswered),
       `:reject`, `:accept`, or `:ringing`. Use `id` to correlate a call's

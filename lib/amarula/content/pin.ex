@@ -2,7 +2,7 @@ defmodule Amarula.Content.Pin do
   @moduledoc """
   A received pin / unpin (`content` of a `%Amarula.Msg{type: :pin}`).
 
-    * `:key` — the pinned message as an `Amarula.Msg.ref/0`.
+    * `:key` — the pinned message as an `t:Amarula.Msg.ref/0`.
     * `:pinned?` — `true` for a pin, `false` for an unpin.
   """
 

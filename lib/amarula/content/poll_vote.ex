@@ -7,7 +7,7 @@ defmodule Amarula.Content.PollVote do
   on the vote. Correlate `:poll_key` back to that poll, then decrypt `:enc_vote`
   with `Amarula.Protocol.Messages.PollCrypto`.
 
-    * `:poll_key` — the poll being voted on, as an `Amarula.Msg.ref/0`.
+    * `:poll_key` — the poll being voted on, as an `t:Amarula.Msg.ref/0`.
     * `:enc_vote` — `%{payload: bytes, iv: bytes}`, the encrypted selection.
     * `:timestamp` — when the vote was cast (ms).
   """

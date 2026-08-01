@@ -1,6 +1,14 @@
 defmodule Amarula.MixProject do
   use Mix.Project
 
+  # `Amarula.Protocol.*` modules that ARE consumer-facing and so stay in the docs
+  # (see `filter_modules` below).
+  @doc_exceptions [
+    "Amarula.Protocol.Call",
+    "Amarula.Protocol.Messages.Poll",
+    "Amarula.Protocol.Messages.PollCrypto"
+  ]
+
   def project do
     [
       app: :amarula,
@@ -59,11 +67,19 @@ defmodule Amarula.MixProject do
       # and behaviours. The top-level Amarula.Connection coordinator is kept (the
       # architecture guide links it). Hidden modules stay compiled and readable in
       # IEx (`h Module`); only the hexdocs surface shrinks.
+      #
+      # Three `Amarula.Protocol.*` modules are exceptions: the consumer-facing API
+      # documents them by name, so hiding them left the docs pointing at pages that
+      # don't exist. `Call` is the `:call_update` event payload; `Poll` and
+      # `PollCrypto` are how a consumer tallies and decrypts incoming poll votes
+      # (`Amarula.Content.PollVote` is explicitly "not self-contained" and sends you
+      # to them).
       filter_modules: fn mod, _meta ->
         name = inspect(mod)
 
-        not (String.starts_with?(name, "Amarula.Protocol.") or
-               String.starts_with?(name, "Amarula.Connection."))
+        name in @doc_exceptions or
+          not (String.starts_with?(name, "Amarula.Protocol.") or
+                 String.starts_with?(name, "Amarula.Connection."))
       end,
       # Collapse module families into "folders" in the sidebar instead of many
       # flat top-level entries: the ~20 Amarula.Content.* message-content structs,

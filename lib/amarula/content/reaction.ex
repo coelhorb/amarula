@@ -2,7 +2,7 @@ defmodule Amarula.Content.Reaction do
   @moduledoc """
   A received reaction (`content` of a `%Amarula.Msg{type: :reaction}`).
 
-    * `:key` — the reacted-to message as an `Amarula.Msg.ref/0` (feed it straight to
+    * `:key` — the reacted-to message as an `t:Amarula.Msg.ref/0` (feed it straight to
       `Amarula.send_reaction/3`).
     * `:emoji` — the reaction emoji; `""` means the reaction was **removed**.
   """

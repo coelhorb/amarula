@@ -2,7 +2,7 @@ defmodule Amarula.Content.Keep do
   @moduledoc """
   A received keep-in-chat / undo (`content` of a `%Amarula.Msg{type: :keep}`).
 
-    * `:key` — the kept message as an `Amarula.Msg.ref/0`.
+    * `:key` — the kept message as an `t:Amarula.Msg.ref/0`.
     * `:kept?` — `true` to keep, `false` to undo a keep.
   """
 
