@@ -40,6 +40,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A stream error with no child tag now reports `"unknown"` instead of an empty
+  reason** ([#72]). `get_first_child_tag/1` returns `""`, never `nil`, so the
+  `|| "unknown"` fallback could not fire and the blank string reached the log and
+  `last_error`. Ships alongside the removal of eight clauses Dialyzer proves
+  unreachable — the one above was hiding this bug.
+
 - **Media sends no longer fail with `{:error, {:send_rejected, "479"}}`** ([#61]).
   Every `send_media/5` — image, video, audio, document, sticker — was rejected by
   the server with ack error 479 (`smax-invalid`), while text sends on the same
@@ -111,6 +117,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#65]: https://github.com/tubedude/amarula/pull/65
 [#68]: https://github.com/tubedude/amarula/pull/68
 [#70]: https://github.com/tubedude/amarula/pull/70
+[#72]: https://github.com/tubedude/amarula/pull/72
 
 ## [0.5.5] - 2026-07-30
 
