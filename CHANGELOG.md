@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`:jpeg_thumbnail` option on `send_media/5` for `:document`** — small JPEG
+  preview bytes embedded in the message (`documentMessage.jpegThumbnail`), so
+  the recipient's bubble renders the document (official clients embed a page-1
+  thumbnail; without it a generic file icon shows). Pairs with `:page_count`.
+- **`config :amarula, send_call_timeout: ms`** — the shared GenServer.call
+  deadline on consumer send/fetch APIs (default unchanged, 90s). Large
+  documents (WhatsApp allows up to 2GB) need the whole encrypt+upload+relay
+  inside this window; pair it with `config :amarula, req_options:
+  [receive_timeout: ...]` for the CDN upload request itself. Verified live to
+  1.75GB.
+
 ## [0.5.6] - 2026-08-01
 
 > **Media sends were broken in every release up to 0.5.5** — if you send media,

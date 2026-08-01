@@ -496,6 +496,7 @@ defmodule Amarula.Protocol.Messages.MessageEncoderTest do
       {:document, :title, "t", :documentMessage, :title},
       {:document, :file_name, "invoice.pdf", :documentMessage, :fileName},
       {:document, :page_count, 7, :documentMessage, :pageCount},
+      {:document, :jpeg_thumbnail, <<0xFF, 0xD8, 0xFF>>, :documentMessage, :jpegThumbnail},
       {:sticker, :width, 512, :stickerMessage, :width},
       {:sticker, :is_animated, true, :stickerMessage, :isAnimated}
     ]

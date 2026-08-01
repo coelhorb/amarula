@@ -126,6 +126,17 @@ defmodule Amarula do
   # case. Mirrors Connection's own bound — the facade calls the process directly.
   @send_call_timeout 90_000
 
+  # All consumer-facing send/fetch calls share one GenServer.call deadline. The 90s
+  # default suits chat traffic; large media (WhatsApp documents go to 2GB) needs the
+  # whole encrypt+upload+relay to fit inside it — raise via config, and pair it with
+  # `config :amarula, req_options: [receive_timeout: ...]` so the CDN upload request
+  # itself is allowed the same patience:
+  #
+  #     config :amarula, send_call_timeout: :timer.minutes(30)
+  #
+  defp send_call_timeout,
+    do: Application.get_env(:amarula, :send_call_timeout, @send_call_timeout)
+
   # Reusable option fragments shared across the send_* schemas (NimbleOptions
   # keyword schemas compose by list concatenation).
   @quoted_opt [
@@ -623,7 +634,7 @@ defmodule Amarula do
   @spec send_text(conn(), jid(), String.t(), keyword()) :: send_result()
   def send_text(conn, jid, text, opts \\ []) do
     opts = NimbleOptions.validate!(opts, @send_text_opts)
-    GenServer.call(conn, {:send_text, jid, text, opts}, @send_call_timeout)
+    GenServer.call(conn, {:send_text, jid, text, opts}, send_call_timeout())
   end
 
   @doc "Set your global presence: `:available` (online) or `:unavailable`."
@@ -717,7 +728,7 @@ defmodule Amarula do
           {:ok, String.t(), binary()} | {:error, term()}
   def send_poll(conn, jid, name, options, opts \\ []) do
     opts = NimbleOptions.validate!(opts, @send_poll_opts)
-    GenServer.call(conn, {:send_poll, jid, name, options, opts}, @send_call_timeout)
+    GenServer.call(conn, {:send_poll, jid, name, options, opts}, send_call_timeout())
   end
 
   @send_poll_vote_opts NimbleOptions.new!(
@@ -943,7 +954,7 @@ defmodule Amarula do
   @spec fetch_history(conn(), message_ref(), integer(), non_neg_integer()) :: send_result()
   def fetch_history(conn, oldest, oldest_ts, count) do
     {_jid, key} = message_key(oldest)
-    GenServer.call(conn, {:fetch_history, key, oldest_ts, count}, @send_call_timeout)
+    GenServer.call(conn, {:fetch_history, key, oldest_ts, count}, send_call_timeout())
   end
 
   @doc """
@@ -976,7 +987,7 @@ defmodule Amarula do
       participant: q.from && key_jid(q.from)
     }
 
-    case GenServer.call(conn, {:request_resend, key}, @send_call_timeout) do
+    case GenServer.call(conn, {:request_resend, key}, send_call_timeout()) do
       {:ok, request_id} -> {:requested, request_id}
       {:error, _} = err -> err
     end
@@ -1181,6 +1192,11 @@ defmodule Amarula do
                          type: :non_neg_integer,
                          doc: "for `:document`, number of pages (shown on the preview card)."
                        ],
+                       jpeg_thumbnail: [
+                         type: :string,
+                         doc:
+                           "small JPEG preview bytes rendered in the bubble (official clients embed a page-1/downscale thumbnail; without it the recipient sees a generic icon). Keep it small (tens of KB)."
+                       ],
                        gif_playback: [
                          type: :boolean,
                          doc: "for `:video`, play as a looping GIF (no audio, autoplay)."
@@ -1229,7 +1245,7 @@ defmodule Amarula do
     # option — split it off so it doesn't trip the strict schema, then re-attach.
     {internal, public} = Keyword.split(opts, [:album_parent])
     public = NimbleOptions.validate!(public, @send_media_opts)
-    GenServer.call(conn, {:send_media, jid, type, data, public ++ internal}, @send_call_timeout)
+    GenServer.call(conn, {:send_media, jid, type, data, public ++ internal}, send_call_timeout())
   end
 
   ## Receiving -----------------------------------------------------------------
@@ -1297,7 +1313,7 @@ defmodule Amarula do
     {chat_jid, participant} = retry_target(msg)
     req = {:request_media_retry, msg.id, chat_jid, msg.from_me, participant, key}
 
-    case GenServer.call(conn, req, @send_call_timeout) do
+    case GenServer.call(conn, req, send_call_timeout()) do
       {:ok, direct_path} -> {:ok, %{m | direct_path: direct_path}}
       {:error, _} = err -> err
     end
@@ -1316,7 +1332,7 @@ defmodule Amarula do
   # message-building send helpers (contact/location/reaction/edit/revoke), which
   # construct a message and relay it as a {:send_message, ...} call.
   defp send_built(conn, jid, message),
-    do: GenServer.call(conn, {:send_message, jid, message}, @send_call_timeout)
+    do: GenServer.call(conn, {:send_message, jid, message}, send_call_timeout())
 
   # Resolve a public message_ref into the chat jid + the %Proto.MessageKey{} the
   # encoders need. A %Amarula.Msg{} and the widened `{jid, id, from_me[, participant]}`
