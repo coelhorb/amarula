@@ -394,24 +394,21 @@ defmodule Amarula.Connection do
     GenServer.call(pid, {:own_chat?, msg})
   end
 
-  @doc """
-  The connection's `%Amarula.Conn{}` — its storage scope + profile. Library code
-  that needs to read/write the Storage seam (sessions, LID mappings) from the
-  *caller's* process holds the pid; this hands it the `%Conn{}` those stores key
-  by. Internal: consumers use the higher-level facade calls.
-  """
+  # The connection's `%Amarula.Conn{}` — its storage scope + profile. Library code
+  # that needs to read/write the Storage seam (sessions, LID mappings) from the
+  # *caller's* process holds the pid; this hands it the `%Conn{}` those stores key
+  # by. Internal: consumers use the higher-level facade calls.
+  @doc false
   @spec get_conn(GenServer.server()) :: Amarula.Conn.t()
   def get_conn(pid), do: GenServer.call(pid, :conn)
 
-  @doc """
-  Send an IQ and block until the matching websocket reply arrives.
-
-  Returns `{:ok, node}` on a `type="result"` reply, `{:error, node}` on an
-  error reply, or `{:error, :timeout}` if no reply comes within the IQ timeout.
-  The caller (a `ConversationSender`) blocks; Connection keeps owning the
-  socket and just routes the reply back. This is the only correlation primitive
-  the send path needs — no continuation logic lives here.
-  """
+  # Send an IQ and block until the matching websocket reply arrives.
+  # Returns `{:ok, node}` on a `type="result"` reply, `{:error, node}` on an
+  # error reply, or `{:error, :timeout}` if no reply comes within the IQ timeout.
+  # The caller (a `ConversationSender`) blocks; Connection keeps owning the
+  # socket and just routes the reply back. This is the only correlation primitive
+  # the send path needs — no continuation logic lives here.
+  @doc false
   @spec query_iq(GenServer.server(), Amarula.Protocol.Binary.Node.t(), timeout()) ::
           {:ok, Amarula.Protocol.Binary.Node.t()}
           | {:error, Amarula.Protocol.Binary.Node.t() | :timeout | :not_connected}
@@ -419,10 +416,9 @@ defmodule Amarula.Connection do
     GenServer.call(pid, {:query_iq, node}, timeout)
   end
 
-  @doc """
-  Frame and send a stanza over the websocket (fire-and-forget; no IQ reply
-  awaited). Used by the send path to relay the final `<message>`.
-  """
+  # Frame and send a stanza over the websocket (fire-and-forget; no IQ reply
+  # awaited). Used by the send path to relay the final `<message>`.
+  @doc false
   @spec relay_stanza(GenServer.server(), Amarula.Protocol.Binary.Node.t()) ::
           :ok | {:error, :not_connected}
   def relay_stanza(pid, node) do
@@ -565,11 +561,10 @@ defmodule Amarula.Connection do
   @spec list_groups(GenServer.server()) :: {:ok, [Amarula.Group.t()]} | {:error, term()}
   def list_groups(pid), do: GenServer.call(pid, :list_groups, 30_000)
 
-  @doc """
-  Run a group management op: send the IQ `Groups.Ops.<builder>` produced and run
-  `transform` on the reply. `transform` is `fn {:ok, node} | {:error, node} ->
-  result end`. Used by the `Amarula` group_* API.
-  """
+  # Run a group management op: send the IQ `Groups.Ops.<builder>` produced and run
+  # `transform` on the reply. `transform` is `fn {:ok, node} | {:error, node} ->
+  # result end`. Used by the `Amarula` group_* API.
+  @doc false
   @spec group_op(GenServer.server(), Node.t(), (term() -> term())) :: term()
   def group_op(pid, %Node{} = iq, transform),
     do: GenServer.call(pid, {:group_op, iq, transform}, 30_000)

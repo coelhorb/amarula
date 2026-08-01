@@ -102,6 +102,16 @@ defmodule Amarula.MixProject do
         "LICENSE",
         "NOTICE"
       ],
+      # Internal `Amarula.Protocol.*` modules are deliberately referenced by name in
+      # docs ("built via `…JID`", "see `…SessionCustodian`") — the name IS the
+      # information, even though the page isn't published. Render them as code, not
+      # links, instead of warning on every mention. The three published exceptions
+      # above still autolink.
+      skip_code_autolink_to: &skip_autolink?/1,
+      # The CHANGELOG documents functions that genuinely no longer exist (renames and
+      # removals in earlier releases). Those references are correct history; they just
+      # can't resolve.
+      skip_undefined_reference_warnings_on: ["CHANGELOG.md"],
       source_url: "https://github.com/tubedude/amarula",
       before_closing_body_tag: &before_closing_body_tag/1
     ]
@@ -144,6 +154,15 @@ defmodule Amarula.MixProject do
   end
 
   defp before_closing_body_tag(_), do: ""
+
+  # Skip autolinking (and its warning) for internal modules: the whole
+  # `Amarula.Protocol.*` layer bar the published exceptions, and the generated
+  # protobuf structs, which are `@moduledoc false`.
+  defp skip_autolink?(ref) do
+    (String.starts_with?(ref, "Amarula.Protocol.") and
+       not Enum.any?(@doc_exceptions, &String.starts_with?(ref, &1))) or
+      String.starts_with?(ref, "Amarula.Connection.")
+  end
 
   # `mix check` runs the test suite, so default it to the :test env.
   def cli do
