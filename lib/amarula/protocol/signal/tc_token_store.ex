@@ -158,11 +158,11 @@ defmodule Amarula.Protocol.Signal.TcTokenStore do
   `issuePrivacyTokens`): `<iq to=s.whatsapp.net type=set xmlns=privacy>
   <tokens><token jid=.. t=.. type=trusted_contact/></tokens></iq>`.
   """
-  @spec build_issue_iq(String.t(), integer()) :: Node.t()
-  def build_issue_iq(jid, timestamp) do
+  @spec build_issue_iq(Conn.t(), String.t(), integer()) :: Node.t()
+  def build_issue_iq(conn, jid, timestamp) do
     token =
       Node.create("token", %{
-        "jid" => JID.jid_normalized_user(jid),
+        "jid" => issuance_jid(conn, jid),
         "t" => Integer.to_string(timestamp),
         "type" => "trusted_contact"
       })
@@ -247,7 +247,7 @@ defmodule Amarula.Protocol.Signal.TcTokenStore do
           _ -> fields
         end
 
-      write(conn, key, Map.merge(existing || %{}, fields))
+      write(conn, key, Map.merge(entry_map(existing), fields))
     end
   end
 
@@ -278,7 +278,7 @@ defmodule Amarula.Protocol.Signal.TcTokenStore do
 
       # Never let a stale reply clobber a newer token for the same contact.
       unless is_map(existing) and Map.get(existing, :timestamp, 0) > ts do
-        write(conn, key, Map.merge(existing || %{}, %{token: content, timestamp: ts}))
+        write(conn, key, Map.merge(entry_map(existing), %{token: content, timestamp: ts}))
       end
     else
       _ -> :ok
@@ -289,7 +289,7 @@ defmodule Amarula.Protocol.Signal.TcTokenStore do
 
   defp record_issued(conn, jid, issued_at) do
     key = storage_jid(conn, jid)
-    existing = read(conn, key) || %{}
+    existing = entry_map(read(conn, key))
     write(conn, key, Map.put(existing, :sender_timestamp, issued_at))
   end
 
@@ -303,6 +303,30 @@ defmodule Amarula.Protocol.Signal.TcTokenStore do
   defp now, do: System.system_time(:second)
 
   # --- storage (mirrors LidMappingFileStore's read/write pattern) ---
+
+  # A stored entry to merge onto. The read path already degrades gracefully on a
+  # corrupt record; the write paths must too — `Map.merge/2` raises on a truthy
+  # non-map, and the `privacy_token` notification writes from the Connection
+  # process itself, so a corrupt entry would take the connection down.
+  defp entry_map(entry) when is_map(entry), do: entry
+  defp entry_map(_), do: %{}
+
+  # The jid we ISSUE against — Baileys `resolveIssuanceJid`. With
+  # `lidTrustedTokenIssueToLid` off (the default this module follows) a LID target
+  # is issued against its PN, so a LID-addressed contact gets a usable token
+  # instead of one the server can't match. Falls back to the LID when we hold no
+  # mapping. NOTE: this is the *storage* direction inverted — `storage_jid/2`
+  # prefers the LID, issuance prefers the PN.
+  defp issuance_jid(conn, jid) do
+    user = JID.jid_normalized_user(jid)
+
+    with true <- JID.lid_user?(user),
+         pn when is_binary(pn) <- LidMappingFileStore.pn_for_lid(conn, user) do
+      JID.encode(%{user: pn, server: "s.whatsapp.net"})
+    else
+      _ -> user
+    end
+  end
 
   # WA Web stores tctoken state under the account-level LID JID when one is
   # known, exactly like Signal sessions (LidMappingFileStore.signal_address/2).
