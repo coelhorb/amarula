@@ -66,6 +66,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`:jpeg_thumbnail` option on `send_media/5` for `:document`** ([#65]) — JPEG
+  preview bytes for the message bubble; without one the recipient sees a generic
+  file icon. Pairs with `:page_count`.
+- **`config :amarula, send_call_timeout: ms`** ([#65]) — the shared
+  `GenServer.call` deadline for send/fetch (default 90s, unchanged). Large media
+  needs the whole encrypt+upload+relay inside it; raise `:req_options`
+  `[receive_timeout:]` alongside. Verified live to 1.75GB.
 - **`:gif_playback`, `:is_animated` and `:page_count` options on `send_media/5`**
   ([#62]) — play a video as a looping GIF, mark a sticker animated, and set a
   document's page count. Builders now name only public snake_case options and a
@@ -100,6 +107,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#59]: https://github.com/tubedude/amarula/issues/59
 [#61]: https://github.com/tubedude/amarula/pull/61
 [#62]: https://github.com/tubedude/amarula/issues/62
+[#65]: https://github.com/tubedude/amarula/pull/65
 [#68]: https://github.com/tubedude/amarula/pull/68
 [#70]: https://github.com/tubedude/amarula/pull/70
 

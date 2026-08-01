@@ -441,7 +441,7 @@ defmodule Amarula.Protocol.Messages.MessageEncoder do
       documentMessage:
         struct(
           Proto.Message.DocumentMessage,
-          Map.merge(common, take(opts, [:title, :file_name, :page_count]))
+          Map.merge(common, take(opts, [:title, :file_name, :page_count, :jpeg_thumbnail]))
         )
     }
   end
@@ -467,6 +467,7 @@ defmodule Amarula.Protocol.Messages.MessageEncoder do
     file_name: :fileName,
     gif_playback: :gifPlayback,
     is_animated: :isAnimated,
+    jpeg_thumbnail: :jpegThumbnail,
     page_count: :pageCount
   }
 
