@@ -67,13 +67,13 @@ defmodule Amarula.Config do
 
       config :amarula, :default_storage_adapter, Amarula.Storage.File
       config :amarula, :retry_cache_adapter, Amarula.RetryCache.ETS
-      config :amarula, send_call_timeout: :timer.minutes(30)
+      config :amarula, send_call_timeout_ms: :timer.minutes(30)
       config :amarula, req_options: [receive_timeout: :timer.minutes(30)]
 
   The two adapters pick a default backend *module*; a connection can still override
   either by naming its own `{module, opts}` in `:storage` / `:retry_cache` above.
 
-  `:send_call_timeout` (default `90_000`) is the `GenServer.call` deadline shared by
+  `:send_call_timeout_ms` (default `90_000`) is the `GenServer.call` deadline shared by
   every send/fetch. Raise it for large media — the whole encrypt + upload + relay
   must fit inside it — and raise `:req_options[:receive_timeout]` with it, or the
   CDN upload request times out first.

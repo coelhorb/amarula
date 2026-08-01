@@ -62,6 +62,10 @@ defmodule Amarula.ProfileRegistry do
     # `Registry.lookup/2`; surface a message naming the fix instead of that opaque
     # "unknown registry" error.
     ArgumentError ->
+      # Deliberately `raise`, not `reraise`: the point is to REPLACE the original,
+      # whose stacktrace points into Registry internals and tells a consumer
+      # nothing. Raising fresh points at `whereis/2` — where their call landed.
+      # credo:disable-for-next-line Credo.Check.Warning.RaiseInsideRescue
       raise """
       Amarula.Supervisor is not running. Add `Amarula.Supervisor` to your supervision \
       tree, before any `{Amarula, …}` connection children:

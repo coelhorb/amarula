@@ -11,10 +11,8 @@ defmodule Amarula.AppState do
   collections back to a clean, version-0 state and re-requests them from the
   server as a fresh snapshot, rather than resuming from the (possibly diverged)
   locally stored version. Reach for it if a collection's local state looks
-  stuck or wrong — most commonly after `Amarula.Protocol.AppState.Sync`
-  reported repeated MAC mismatches (see its moduledoc) and truncated batches,
-  leaving that collection out of sync with the server for longer than a normal
-  resync would fix on its own.
+  stuck or wrong — most commonly after repeated MAC mismatches and truncated batches left it
+  out of sync with the server for longer than a normal resync would fix.
   """
 
   alias Amarula.Connection
@@ -28,6 +26,10 @@ defmodule Amarula.AppState do
   Fire-and-forget — this returns as soon as the request is queued, not once the
   server replies. Results land the same way any other app-state resync's do:
   `:chats_update` / `:contacts_update` events to `parent_pid`.
+
+  `names` is `:all` (the default) or a list drawn from the five collections:
+  `"critical_block"`, `"critical_unblock_low"`, `"regular_high"`, `"regular"`,
+  `"regular_low"`. An unrecognised name resyncs nothing.
 
       Amarula.AppState.force_resync(conn)
       Amarula.AppState.force_resync(conn, ["regular", "regular_low"])

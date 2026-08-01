@@ -682,7 +682,7 @@ defmodule Amarula.Protocol.Messages.ConversationSender do
         ctx.creds.account,
         edit: ctx.edit_attr,
         extra_attrs: ctx.stanza_attrs,
-        enc_attrs: Map.get(ctx, :enc_attrs, %{})
+        enc_attrs: ctx.enc_attrs
       )
 
     # relay_stanza enqueues the frame on the socket and replies :ok (it can't know
@@ -707,7 +707,7 @@ defmodule Amarula.Protocol.Messages.ConversationSender do
         ctx.creds.account,
         edit: ctx.edit_attr,
         extra_attrs: ctx.stanza_attrs,
-        enc_attrs: Map.get(ctx, :enc_attrs, %{}),
+        enc_attrs: ctx.enc_attrs,
         extra_children: tctoken_children(ctx)
       )
 

@@ -35,7 +35,15 @@ defmodule Amarula.Connection do
   # A send blocks the caller until the per-recipient sender finishes (up to three
   # IQ round-trips for a new recipient). The client-side call timeout must exceed
   # that worst case — see ConversationSender's own bound.
-  @send_call_timeout 90_000
+  @send_call_timeout_default 90_000
+
+  @doc false
+  # The GenServer.call deadline shared by every consumer send/fetch — here and on
+  # the `Amarula` facade, so both honour `config :amarula, send_call_timeout_ms:`.
+  # Read at call time (not a module attribute) so runtime config applies.
+  @spec send_call_timeout() :: timeout()
+  def send_call_timeout,
+    do: Application.get_env(:amarula, :send_call_timeout_ms, @send_call_timeout_default)
 
   @media_default_mimetype %{
     image: "image/jpeg",
@@ -62,7 +70,7 @@ defmodule Amarula.Connection do
   @media_retry_timeout_ms 30_000
 
   # The <ack> wait (default 30s, config :ack_timeout_ms) lives on
-  # Connection.AckLifecycle now; @send_call_timeout must still exceed it.
+  # Connection.AckLifecycle now; send_call_timeout/0 must still exceed it.
   alias Amarula.Protocol.Crypto.Constants
   alias Amarula.Protocol.Proto
 
@@ -444,17 +452,19 @@ defmodule Amarula.Connection do
     ts = System.system_time(:second)
     iq = TcTokenStore.build_issue_iq(conn, jid, ts)
 
-    result_node =
-      case query_iq(pid, iq) do
-        {:ok, node} ->
-          node
+    # Only record on success. `store_result/4` stamps `sender_timestamp`, which
+    # `should_issue_new?/2` reads to skip re-issuing for the rest of the ~7-day
+    # bucket — so stamping after a failed IQ (timeout, disconnect mid-send) would
+    # suppress issuance for that contact for a week over a transient error.
+    # Baileys likewise records only in the success branch.
+    case query_iq(pid, iq) do
+      {:ok, node} ->
+        TcTokenStore.store_result(conn, node, jid, ts)
 
-        {:error, reason} ->
-          Logger.debug("tctoken issuance for #{jid} failed: #{inspect(reason)}")
-          nil
-      end
-
-    TcTokenStore.store_result(conn, result_node, jid, ts)
+      {:error, reason} ->
+        Logger.debug("tctoken issuance for #{jid} failed: #{inspect(reason)}")
+        :ok
+    end
   end
 
   @doc "Cast a request to force-refresh sessions for newly mapped LIDs."
@@ -573,7 +583,7 @@ defmodule Amarula.Connection do
   recipient's prekey bundle first if we have no session). Returns `{:ok, msg_id}`.
   """
   def send_text(pid, jid, text, opts \\ []) do
-    GenServer.call(pid, {:send_text, jid, text, opts}, @send_call_timeout)
+    GenServer.call(pid, {:send_text, jid, text, opts}, send_call_timeout())
   end
 
   @doc """
@@ -581,17 +591,17 @@ defmodule Amarula.Connection do
   reactions, edits, deletes and media. Returns `{:ok, msg_id}`.
   """
   def send_message(pid, jid, %Proto.Message{} = message) do
-    GenServer.call(pid, {:send_message, jid, message}, @send_call_timeout)
+    GenServer.call(pid, {:send_message, jid, message}, send_call_timeout())
   end
 
   @doc "Ask the phone to re-deliver a message by key (PEER_DATA_OPERATION resend)."
   def request_resend(pid, %Proto.MessageKey{} = message_key) do
-    GenServer.call(pid, {:request_resend, message_key}, @send_call_timeout)
+    GenServer.call(pid, {:request_resend, message_key}, send_call_timeout())
   end
 
   @doc "Ask the phone for older history of a chat (PEER_DATA_OPERATION on-demand)."
   def fetch_history(pid, %Proto.MessageKey{} = oldest_key, oldest_ts, count) do
-    GenServer.call(pid, {:fetch_history, oldest_key, oldest_ts, count}, @send_call_timeout)
+    GenServer.call(pid, {:fetch_history, oldest_key, oldest_ts, count}, send_call_timeout())
   end
 
   @doc """
@@ -599,7 +609,7 @@ defmodule Amarula.Connection do
   to tally incoming votes. `opts`: `:selectable`, `:announcement`, `:message_secret`.
   """
   def send_poll(pid, jid, name, options, opts \\ []) do
-    GenServer.call(pid, {:send_poll, jid, name, options, opts}, @send_call_timeout)
+    GenServer.call(pid, {:send_poll, jid, name, options, opts}, send_call_timeout())
   end
 
   @doc "Send a contact (`display_name` + vCard string) to `jid`."
@@ -642,7 +652,7 @@ defmodule Amarula.Connection do
   """
   def send_media(pid, jid, type, data, opts \\ [])
       when type in [:image, :video, :audio, :document, :sticker] and is_binary(data) do
-    GenServer.call(pid, {:send_media, jid, type, data, opts}, @send_call_timeout)
+    GenServer.call(pid, {:send_media, jid, type, data, opts}, send_call_timeout())
   end
 
   @doc "Convenience: `send_media(pid, jid, :image, ...)`."

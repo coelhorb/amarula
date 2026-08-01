@@ -126,7 +126,7 @@ defmodule Amarula.Protocol.Signal.Group.SenderKeyStateTest do
       {removed_key, final_state} = SenderKeyState.remove_sender_message_key(updated_state, 5)
 
       assert removed_key == message_key
-      assert length(final_state.sender_message_keys) == 0
+      assert final_state.sender_message_keys == []
     end
 
     test "returns nil when message key does not exist" do

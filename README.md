@@ -255,8 +255,9 @@ group_jid = Amarula.Address.to_jid!(group.address)
 # → share https://chat.whatsapp.com/<code>
 ```
 
-`Amarula.Contacts` (is this number on WhatsApp? LID↔PN resolution) and
-`Amarula.Profile` (picture, status) follow the same pattern.
+`Amarula.Contacts` (is this number on WhatsApp? LID↔PN resolution),
+`Amarula.Profile` (picture, status) and `Amarula.AppState` (force a chat/contact
+resync) follow the same pattern.
 
 ## Test your bot offline
 

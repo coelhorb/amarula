@@ -124,18 +124,10 @@ defmodule Amarula do
   # A send blocks the caller until the per-recipient sender finishes (up to three
   # IQ round-trips for a new recipient); the call timeout must exceed that worst
   # case. Mirrors Connection's own bound — the facade calls the process directly.
-  @send_call_timeout 90_000
-
-  # All consumer-facing send/fetch calls share one GenServer.call deadline. The 90s
-  # default suits chat traffic; large media (WhatsApp documents go to 2GB) needs the
-  # whole encrypt+upload+relay to fit inside it — raise via config, and pair it with
-  # `config :amarula, req_options: [receive_timeout: ...]` so the CDN upload request
-  # itself is allowed the same patience:
-  #
-  #     config :amarula, send_call_timeout: :timer.minutes(30)
-  #
-  defp send_call_timeout,
-    do: Application.get_env(:amarula, :send_call_timeout, @send_call_timeout)
+  # The GenServer.call deadline for every consumer send/fetch. Owned by
+  # `Amarula.Connection` so the facade and its own `send_*` wrappers can't drift —
+  # raising `config :amarula, send_call_timeout_ms:` must affect both.
+  defp send_call_timeout, do: Connection.send_call_timeout()
 
   # Reusable option fragments shared across the send_* schemas (NimbleOptions
   # keyword schemas compose by list concatenation).
@@ -935,6 +927,7 @@ defmodule Amarula do
   #   * `Amarula.Contacts` — on_whatsapp/2, fetch_status/2, resolve_lid/2
   #   * `Amarula.Profile`  — picture_url/3, update_picture/3, remove_picture/2, update_status/2
   #   * `Amarula.Group`    — create/3, leave/2, metadata/2, list/1, invites, requests, …
+  #   * `Amarula.AppState` — force_resync/2
 
   ## Replies / quoted messages -----------------------------------------------
 
