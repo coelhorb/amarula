@@ -157,6 +157,46 @@ defmodule Amarula.Protocol.Signal.TcTokenStoreTest do
     end
   end
 
+  describe "build_issue_iq/3 — the issuance jid" do
+    test "a LID target is issued against its PN", %{conn: conn} do
+      # Baileys `resolveIssuanceJid`: with lidTrustedTokenIssueToLid off (the
+      # default this module follows) the server wants the PN, so issuing against
+      # the LID earns a token it can't match back to the contact.
+      iq = TcTokenStore.build_issue_iq(conn, @lid, 1_700_000_000)
+      assert token_jid(iq) == @pn
+    end
+
+    test "a PN target is unchanged", %{conn: conn} do
+      iq = TcTokenStore.build_issue_iq(conn, @pn, 1_700_000_000)
+      assert token_jid(iq) == @pn
+    end
+
+    test "an unmapped LID falls back to the LID", %{conn: conn} do
+      iq = TcTokenStore.build_issue_iq(conn, "111222333@lid", 1_700_000_000)
+      assert token_jid(iq) == "111222333@lid"
+    end
+
+    test "a device suffix is stripped", %{conn: conn} do
+      iq = TcTokenStore.build_issue_iq(conn, "15551234567:3@s.whatsapp.net", 1_700_000_000)
+      assert token_jid(iq) == @pn
+    end
+  end
+
+  describe "corrupt stored entry" do
+    test "a non-map entry doesn't crash the write paths", %{conn: conn} do
+      # The read path already degrades; the writes used Map.merge, which raises on
+      # a truthy non-map — and the privacy_token write runs in the Connection
+      # process, so a corrupt record would take the connection down.
+      :ok = Storage.put(conn.storage, @profile, :tctoken, @lid, "corrupt")
+
+      assert TcTokenStore.valid_token(conn, @pn) == nil
+
+      entries = [%{jid: @pn, token: "recovered", timestamp: now()}]
+      assert :ok = TcTokenStore.store_history_sync(conn, entries)
+      assert TcTokenStore.valid_token(conn, @pn) == "recovered"
+    end
+  end
+
   describe "should_issue_new?/2" do
     test "true when we have never issued for this contact", %{conn: conn} do
       assert TcTokenStore.should_issue_new?(conn, @pn)
@@ -173,6 +213,13 @@ defmodule Amarula.Protocol.Signal.TcTokenStoreTest do
 
       assert TcTokenStore.should_issue_new?(conn, @pn)
     end
+  end
+
+  defp token_jid(iq) do
+    iq
+    |> Amarula.Protocol.Binary.NodeUtils.get_binary_node_child("tokens")
+    |> Amarula.Protocol.Binary.NodeUtils.get_binary_node_child("token")
+    |> Amarula.Protocol.Binary.NodeUtils.get_attr("jid")
   end
 
   defp put_token(conn, entry),

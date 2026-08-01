@@ -108,6 +108,7 @@ defmodule Amarula.Connection do
     pending_media_retries: %{},
     sender_monitors: %{},
     media_tasks: %{},
+    tctoken_recoveries: %{},
     migrated_pn_sessions: MapSet.new()
   ]
 
@@ -180,6 +181,10 @@ defmodule Amarula.Connection do
           # ref → the parked caller `from` + target jid. The task result replies via
           # the {ref, result} message; a task crash replies via its {:DOWN, ref, …}.
           media_tasks: %{reference() => {GenServer.from(), String.t()}},
+          # In-flight 463 tctoken recoveries (async_nolink), monitor ref → jid.
+          # Guards against concurrent 463s for one contact each spawning an
+          # issuance IQ (Baileys' `inFlight463Recoveries`).
+          tctoken_recoveries: %{reference() => String.t()},
           # Media re-upload requests awaiting the phone's mediaretry notification,
           # keyed by msg id. Each holds the consumer's `from`, the media_key needed
           # to decrypt the reply, and the timeout timer.
@@ -430,7 +435,7 @@ defmodule Amarula.Connection do
   @spec issue_tctoken(GenServer.server(), Amarula.Conn.t(), String.t()) :: :ok
   def issue_tctoken(pid, conn, jid) do
     ts = System.system_time(:second)
-    iq = TcTokenStore.build_issue_iq(jid, ts)
+    iq = TcTokenStore.build_issue_iq(conn, jid, ts)
 
     result_node =
       case query_iq(pid, iq) do
@@ -1394,6 +1399,20 @@ defmodule Amarula.Connection do
   # A media-prep task crashed before returning a result (async_nolink, so the exit
   # doesn't reach us as a link — only this monitor DOWN). Answer the parked caller
   # with a clean error instead of letting it hang to the send-call timeout.
+  # A 463 tctoken recovery finished (or died). Either way it is fire-and-forget —
+  # just drop the in-flight entry so a later 463 for the same contact can retry.
+  @impl GenServer
+  def handle_info({ref, _result}, state) when is_map_key(state.tctoken_recoveries, ref) do
+    Process.demonitor(ref, [:flush])
+    {:noreply, %{state | tctoken_recoveries: Map.delete(state.tctoken_recoveries, ref)}}
+  end
+
+  @impl GenServer
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, state)
+      when is_map_key(state.tctoken_recoveries, ref) do
+    {:noreply, %{state | tctoken_recoveries: Map.delete(state.tctoken_recoveries, ref)}}
+  end
+
   @impl GenServer
   def handle_info({:DOWN, ref, :process, _pid, reason}, state)
       when is_map_key(state.media_tasks, ref) do
@@ -2061,7 +2080,7 @@ defmodule Amarula.Connection do
 
       {:error, {:send_rejected, code}} = err ->
         emit_ack_outcome(state, msg_id, :rejected, code)
-        maybe_recover_tctoken(state, node, code)
+        state = maybe_recover_tctoken(state, node, code)
         resolve_ack(state, msg_id, fn _on_ack -> err end)
     end
   end
@@ -2072,19 +2091,31 @@ defmodule Amarula.Connection do
   # message itself (Baileys' handleBadAck: retrying counts as another "reach
   # out" and worsens the restriction). See `TcTokenStore` moduledoc.
   defp maybe_recover_tctoken(state, node, "463") do
-    case NodeUtils.get_attr(node, "from") do
-      jid when is_binary(jid) ->
+    jid = NodeUtils.get_attr(node, "from")
+
+    cond do
+      not is_binary(jid) ->
+        state
+
+      # Already recovering this contact — a burst of rejected sends yields a burst
+      # of 463s, and one issuance answers them all (Baileys' inFlight463Recoveries).
+      jid in Map.values(state.tctoken_recoveries) ->
+        state
+
+      true ->
         pid = self()
         conn = state.conn
 
-        Task.Supervisor.start_child(state.task_supervisor, fn -> issue_tctoken(pid, conn, jid) end)
+        task =
+          Task.Supervisor.async_nolink(state.task_supervisor, fn ->
+            issue_tctoken(pid, conn, jid)
+          end)
 
-      _ ->
-        :ok
+        put_in(state.tctoken_recoveries[task.ref], jid)
     end
   end
 
-  defp maybe_recover_tctoken(_state, _node, _code), do: :ok
+  defp maybe_recover_tctoken(state, _node, _code), do: state
 
   # Telemetry for the outcome of a tracked send AFTER relay — the send span
   # closes at relay time, so the server's verdict needs its own event. Gated on

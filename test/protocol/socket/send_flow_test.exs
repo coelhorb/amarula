@@ -1117,6 +1117,26 @@ defmodule Amarula.Protocol.Socket.SendFlowTest do
     refute_receive {:frame_out, %{tag: "message"}}, 200
   end
 
+  test "concurrent 463s for one contact issue a single tctoken", ctx do
+    # A burst of rejected sends yields a burst of 463s. One issuance answers them
+    # all — issuing per rejection piles IQs on an account that is already
+    # restricted (Baileys' inFlight463Recoveries guard).
+    task = send_text_async(ctx, @jid, "first")
+    msg_id = relay_text(ctx).attrs["id"]
+
+    ack(ctx, msg_id, error: "463", from: @jid)
+    ack(ctx, msg_id, error: "463", from: @jid)
+    ack(ctx, msg_id, error: "463", from: @jid)
+
+    assert {:error, {:send_rejected, "463"}} = await_send_result(task)
+
+    assert_receive {:frame_out, %{tag: "iq"} = iq}, 1_000
+    assert attr(iq, "xmlns") == "privacy"
+
+    # No second issuance while the first is still in flight.
+    refute_receive {:frame_out, %{tag: "iq"}}, 300
+  end
+
   test "a phash ack (no error attr) is success, never a resend", ctx do
     # Baileys handleBadAck warns a phash-driven resend loops. A plain ack — even
     # one carrying a phash — is success; only an `error` attr is a failure.
