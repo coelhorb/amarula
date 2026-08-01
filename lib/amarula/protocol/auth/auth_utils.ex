@@ -90,7 +90,7 @@ defmodule Amarula.Protocol.Auth.AuthUtils do
 
   Creates a ClientPayload for device registration with WhatsApp servers.
   """
-  @spec generate_registration_node(any(), socket_config()) :: %Proto.ClientPayload{}
+  @spec generate_registration_node(any(), socket_config()) :: Proto.ClientPayload.t()
   def generate_registration_node(creds, config) do
     app_version_hash = :crypto.hash(:md5, Enum.join(config.version, "."))
 
@@ -128,7 +128,7 @@ defmodule Amarula.Protocol.Auth.AuthUtils do
 
   Creates a ClientPayload for logging into an existing WhatsApp session.
   """
-  @spec generate_login_node(binary(), socket_config()) :: %Proto.ClientPayload{}
+  @spec generate_login_node(binary(), socket_config()) :: Proto.ClientPayload.t()
   def generate_login_node(user_jid, config) do
     # Parse JID to extract user and device
     {user, device} = parse_jid(user_jid)
