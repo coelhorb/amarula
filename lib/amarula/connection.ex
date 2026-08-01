@@ -251,14 +251,8 @@ defmodule Amarula.Connection do
     %{id: __MODULE__, start: {__MODULE__, :start_link, [conn, opts]}}
   end
 
-  @doc """
-  Start a connection instance and return its pid — the consumer's handle. Starts
-  the per-connection supervision tree (Registry, caches, sender supervisor, this
-  Connection) and hands back the Connection child pid, so the public API
-  (`connect/send_text/...` on that pid) lands here directly.
-
-  `opts` may carry `:parent_pid` (events sink, default the caller).
-  """
+  # Internal plumbing; not part of the consumer API.
+  @doc false
   @spec make_socket(Amarula.Conn.t(), keyword()) ::
           {:ok, pid()} | {:error, {:already_running, pid()}} | {:error, term()}
   def make_socket(%Amarula.Conn{} = conn, opts \\ []) do
@@ -309,26 +303,20 @@ defmodule Amarula.Connection do
     end
   end
 
-  @doc """
-  Connects to the WebSocket server.
-  """
+  # Internal: the documented entry point is `Amarula.connect/2`.
+  @doc false
   def connect(pid) do
     GenServer.call(pid, :connect)
   end
 
-  @doc """
-  Disconnects from the WebSocket server.
-  """
+  # Internal: the documented entry point is `Amarula.disconnect/1`.
+  @doc false
   def disconnect(pid) do
     GenServer.call(pid, :disconnect)
   end
 
-  @doc """
-  Stop the whole connection tree (this Connection, its caches + sender supervisor),
-  freeing the profile registration. Unlike `disconnect/1` (which only closes the
-  websocket, leaving the supervised tree up to reconnect), this releases the profile
-  so it can be started again elsewhere. Returns `:ok | {:error, :not_found}`.
-  """
+  # Internal: the documented entry point is `Amarula.stop/1`.
+  @doc false
   @spec stop(pid()) :: :ok | {:error, :not_found}
   def stop(pid) do
     case GenServer.call(pid, :instance_id) do
@@ -337,9 +325,8 @@ defmodule Amarula.Connection do
     end
   end
 
-  @doc """
-  Gets the current connection state.
-  """
+  # Internal: the documented entry point is `Amarula.connection_state/1`.
+  @doc false
   def get_connection_state(pid) do
     GenServer.call(pid, :get_connection_state)
   end
@@ -359,36 +346,15 @@ defmodule Amarula.Connection do
     GenServer.call(pid, {:set_parent, sink})
   end
 
-  @doc """
-  Canonicalize `jid` to its phone-number identity. If `jid` is a LID
-  (`<n>@lid`) with a stored PN mapping, returns the equivalent
-  `<pn>@s.whatsapp.net` (preserving any device). Any other jid — already a PN,
-  a group, or a LID with no known mapping — is returned unchanged.
-
-  This is the public entry point to the LID↔PN mapping the library maintains
-  internally; consumers no longer need to reach into `Protocol.Signal.*`.
-  """
+  # Internal plumbing; not part of the consumer API.
+  @doc false
   @spec canonical_jid(GenServer.server(), String.t()) :: String.t()
   def canonical_jid(pid, jid) when is_binary(jid) do
     GenServer.call(pid, {:canonical_jid, jid})
   end
 
-  @doc """
-  Whether `msg` is a message in our **own** chat (the "Message Yourself" chat) — i.e.
-  it's `from_me` and addressed `to` our own account.
-
-  This is the check a self-chat command channel needs (drive an agent by messaging
-  yourself), and it handles the LID/PN duality for you: WhatsApp may address the self
-  chat by either our PN (`me.id`, always present) or our LID (`me.lid`, present once the
-  server has sent it), so it matches `msg.to` against **both** of our own identities
-  (device ignored) rather than forcing a single normalized form.
-
-  On a **single connection** there is no feedback loop: a reply this connection sends to
-  the self chat is delivered to our *other* devices but not back to us (the send path
-  excludes our own sending device), so you don't need to filter your own sends. Only when
-  running **two connections on the same account** do their self-chat sends reach each
-  other — dedupe those cross-connection by the `msg_id` from the send.
-  """
+  # Internal: the documented entry point is `Amarula.own_chat?/2`.
+  @doc false
   @spec own_chat?(GenServer.server(), Amarula.Msg.t()) :: boolean()
   def own_chat?(pid, %Amarula.Msg{} = msg) do
     GenServer.call(pid, {:own_chat?, msg})
@@ -463,77 +429,44 @@ defmodule Amarula.Connection do
     end
   end
 
-  @doc "Cast a request to force-refresh sessions for newly mapped LIDs."
+  # Internal: LID session refresh, driven by the receive path.
+  @doc false
   @spec assert_lid_sessions(GenServer.server(), [String.t()]) :: :ok
   def assert_lid_sessions(_pid, []), do: :ok
   def assert_lid_sessions(pid, lids), do: GenServer.cast(pid, {:assert_lid_sessions, lids})
 
-  @doc """
-  Re-key newly-learned LID↔PN pairs so existing PN Signal sessions move onto the LID
-  address instead of renegotiating. `pairs` is `[{lid_jid, pn_jid}, ...]`. Contacts
-  with no prior PN session get a fresh prekey-bundle fetch instead.
-
-  Synchronous (a `call`) on purpose: the caller (a `ConversationSender`) reads the
-  session at the LID address immediately after in `ensure_sessions`, so the move
-  must be committed first — a cast would race that read and force a needless
-  renegotiation. Safe from deadlock: this handler never calls back into the sender.
-  """
+  # Internal plumbing; not part of the consumer API.
+  @doc false
   @spec migrate_pn_sessions(GenServer.server(), [{String.t(), String.t()}]) :: :ok
   def migrate_pn_sessions(_pid, []), do: :ok
   def migrate_pn_sessions(pid, pairs), do: GenServer.call(pid, {:migrate_pn_sessions, pairs})
 
-  @doc """
-  Cast newly-learned LID↔PN pairs so the consumer gets a `:lid_mapping_update`
-  event. `pairs` is `[{lid_jid, pn_jid}, ...]`.
-  """
+  # Internal plumbing; not part of the consumer API.
+  @doc false
   @spec notify_lid_mappings(GenServer.server(), [{String.t(), String.t()}]) :: :ok
   def notify_lid_mappings(_pid, []), do: :ok
   def notify_lid_mappings(pid, pairs), do: GenServer.cast(pid, {:notify_lid_mappings, pairs})
 
-  @doc """
-  Force a fresh app-state resync for `names` (default: all collections), from a
-  clean snapshot rather than the locally stored version.
-
-  Every other app-state resync (`resync_app_state/2`) is server-triggered —
-  `server_sync`/`account_sync` notifications, or a freshly-shared sync key — and
-  resumes from whatever version is stored locally. This is the one
-  consumer-initiated path: it resets the named collections' stored state to
-  version 0 first, so the request the server sees is indistinguishable from a
-  first-ever sync (`return_snapshot: true`, matching Baileys' `resyncAppState`
-  with a fresh `LTHashState`) — the recovery lever for a collection whose local
-  state has drifted (e.g. after repeated snapshot-MAC mismatches truncated
-  batches; see `Sync.decode_collection/5`).
-
-  Fire-and-forget: results land as the usual `:chats_update`/`:contacts_update`
-  events once the reply decodes, same as any other resync.
-  """
+  # Internal: the documented entry point is `Amarula.AppState.force_resync/2`.
+  @doc false
   @spec force_resync_app_state(GenServer.server(), [String.t()] | :all) :: :ok
   def force_resync_app_state(pid, names \\ :all),
     do: GenServer.cast(pid, {:force_resync_app_state, names})
 
-  @doc "Send global presence (`:available`/`:unavailable`). Needs `me.name`."
+  # Internal: the documented entry point is `Amarula.set_presence/2`.
+  @doc false
   @spec set_presence(GenServer.server(), :available | :unavailable) :: :ok | {:error, term()}
   def set_presence(pid, type), do: GenServer.call(pid, {:set_presence, type})
 
-  @doc "Send a chat-state to `jid` (`:composing`/`:recording`/`:paused`)."
+  # Internal: the documented entry point is `Amarula.send_chatstate/3`.
+  @doc false
   @spec send_chatstate(GenServer.server(), Amarula.jid(), :composing | :recording | :paused) ::
           :ok | {:error, :not_connected}
   def send_chatstate(pid, jid, type),
     do: GenServer.call(pid, {:send_chatstate, jid, type})
 
-  @doc """
-  Request a link-code (phone-number) pairing code for `phone` (digits only,
-  E.164 without `+`).
-
-  Call this during the QR window while unregistered (on the first
-  `:connection_update` carrying a `qr`). Returns `{:ok, code}` with an 8-char
-  code the user types into WhatsApp → Linked Devices → "Link with phone number".
-  The server later pushes a `link_code_companion_reg` notification, which we
-  finish internally; the usual 515 restart then logs in.
-
-  Pass `custom_code: "ABCD2345"` to use a fixed 8-char code instead of a random
-  one.
-  """
+  # Internal: the documented entry point is `Amarula.request_pairing_code/3`.
+  @doc false
   @spec request_pairing_code(GenServer.server(), String.t(), keyword()) ::
           {:ok, String.t()} | {:error, term()}
   def request_pairing_code(pid, phone, opts \\ []) do
@@ -541,23 +474,27 @@ defmodule Amarula.Connection do
     GenServer.call(pid, {:request_pairing_code, digits, Keyword.get(opts, :custom_code)})
   end
 
-  @doc "Subscribe to a contact's presence."
+  # Internal: the documented entry point is `Amarula.subscribe_presence/2`.
+  @doc false
   @spec presence_subscribe(GenServer.server(), Amarula.jid()) :: :ok | {:error, :not_connected}
   def presence_subscribe(pid, jid),
     do: GenServer.call(pid, {:presence_subscribe, jid})
 
-  @doc "Send a read receipt for `message_ids` in chat `jid` (optional `participant`)."
+  # Internal: the documented entry point is `Amarula.mark_read/3`.
+  @doc false
   @spec mark_read(GenServer.server(), Amarula.jid(), [String.t(), ...], Amarula.jid() | nil) ::
           :ok | {:error, :not_connected}
   def mark_read(pid, jid, message_ids, participant \\ nil),
     do: GenServer.call(pid, {:mark_read, jid, message_ids, participant})
 
-  @doc "Fetch one group's metadata. `group` is an `Address` or the `@g.us` jid string."
+  # Internal: the documented entry point is `Amarula.Group.metadata/2`.
+  @doc false
   @spec group_metadata(GenServer.server(), Amarula.jid()) ::
           {:ok, Amarula.Group.t()} | {:error, term()}
   def group_metadata(pid, group), do: GenServer.call(pid, {:group_metadata, group})
 
-  @doc "Fetch all groups we participate in."
+  # Internal: the documented entry point is `Amarula.Group.list/1`.
+  @doc false
   @spec list_groups(GenServer.server()) :: {:ok, [Amarula.Group.t()]} | {:error, term()}
   def list_groups(pid), do: GenServer.call(pid, :list_groups, 30_000)
 
@@ -569,14 +506,13 @@ defmodule Amarula.Connection do
   def group_op(pid, %Node{} = iq, transform),
     do: GenServer.call(pid, {:group_op, iq, transform}, 30_000)
 
-  @doc "Unlink this companion server-side, wipe ALL local storage, then disconnect. Destructive."
+  # Internal: the documented entry point is `Amarula.wipe_credentials/1`.
+  @doc false
   @spec wipe_credentials(GenServer.server()) :: :ok | {:error, term()}
   def wipe_credentials(pid), do: GenServer.call(pid, :wipe_credentials)
 
-  @doc """
-  Send a 1:1/group text message to `jid`. Encrypts and relays (fetching the
-  recipient's prekey bundle first if we have no session). Returns `{:ok, msg_id}`.
-  """
+  # Internal: the documented entry point is `Amarula.send_text/4`.
+  @doc false
   def send_text(pid, jid, text, opts \\ []) do
     GenServer.call(pid, {:send_text, jid, text, opts}, send_call_timeout())
   end
@@ -589,68 +525,69 @@ defmodule Amarula.Connection do
     GenServer.call(pid, {:send_message, jid, message}, send_call_timeout())
   end
 
-  @doc "Ask the phone to re-deliver a message by key (PEER_DATA_OPERATION resend)."
+  # Internal: the documented entry point is `Amarula.resolve_quoted/2`.
+  @doc false
   def request_resend(pid, %Proto.MessageKey{} = message_key) do
     GenServer.call(pid, {:request_resend, message_key}, send_call_timeout())
   end
 
-  @doc "Ask the phone for older history of a chat (PEER_DATA_OPERATION on-demand)."
+  # Internal: the documented entry point is `Amarula.fetch_history/4`.
+  @doc false
   def fetch_history(pid, %Proto.MessageKey{} = oldest_key, oldest_ts, count) do
     GenServer.call(pid, {:fetch_history, oldest_key, oldest_ts, count}, send_call_timeout())
   end
 
-  @doc """
-  Send a poll to `jid`. Returns `{:ok, msg_id, message_secret}` — keep the secret
-  to tally incoming votes. `opts`: `:selectable`, `:announcement`, `:message_secret`.
-  """
+  # Internal: the documented entry point is `Amarula.send_poll/5`.
+  @doc false
   def send_poll(pid, jid, name, options, opts \\ []) do
     GenServer.call(pid, {:send_poll, jid, name, options, opts}, send_call_timeout())
   end
 
-  @doc "Send a contact (`display_name` + vCard string) to `jid`."
+  # Internal: the documented entry point is `Amarula.send_contact/4`.
+  @doc false
   def send_contact(pid, jid, display_name, vcard) do
     send_message(pid, jid, MessageEncoder.contact(display_name, vcard))
   end
 
-  @doc "Send multiple contacts: `pairs` is `[{display_name, vcard}, ...]`."
+  # Internal: the documented entry point is `Amarula.send_contacts/4`.
+  @doc false
   def send_contacts(pid, jid, display_name, pairs) do
     send_message(pid, jid, MessageEncoder.contacts(display_name, pairs))
   end
 
-  @doc "Send a location to `jid`. `opts`: `:name`, `:address`, `:url`, `:is_live`."
+  # Internal: the documented entry point is `Amarula.send_location/5`.
+  @doc false
   def send_location(pid, jid, lat, lng, opts \\ []) do
     send_message(pid, jid, MessageEncoder.location(lat, lng, opts))
   end
 
-  @doc """
-  React to a message with `emoji` (pass "" to remove the reaction). `target_key`
-  is the `%Proto.MessageKey{}` of the message being reacted to.
-  """
+  # Internal: the documented entry point is `Amarula.send_reaction/3`.
+  @doc false
   def send_reaction(pid, %Proto.MessageKey{remoteJid: jid} = target_key, emoji) do
     send_message(pid, jid, MessageEncoder.reaction(target_key, emoji))
   end
 
-  @doc "Delete a message for everyone (revoke). `target_key` is its `%Proto.MessageKey{}`."
+  # Internal: the documented entry point is `Amarula.send_revoke/2`.
+  @doc false
   def send_revoke(pid, %Proto.MessageKey{remoteJid: jid} = target_key) do
     send_message(pid, jid, MessageEncoder.revoke(target_key))
   end
 
-  @doc "Edit a previously-sent message, replacing its text with `new_text`."
+  # Internal: the documented entry point is `Amarula.send_edit/3`.
+  @doc false
   def send_edit(pid, %Proto.MessageKey{remoteJid: jid} = target_key, new_text) do
     send_message(pid, jid, MessageEncoder.edit(target_key, new_text))
   end
 
-  @doc """
-  Send a media message to `jid`. `type` is `:image`/`:video`/`:audio`/
-  `:document`/`:sticker`; `data` is the raw bytes. `opts` may carry `:mimetype`
-  plus per-type extras. Encrypts + uploads + sends. `{:ok, msg_id}` or `{:error, _}`.
-  """
+  # Internal: the documented entry point is `Amarula.send_media/5`.
+  @doc false
   def send_media(pid, jid, type, data, opts \\ [])
       when type in [:image, :video, :audio, :document, :sticker] and is_binary(data) do
     GenServer.call(pid, {:send_media, jid, type, data, opts}, send_call_timeout())
   end
 
-  @doc "Convenience: `send_media(pid, jid, :image, ...)`."
+  # Internal: the documented entry point is `Amarula.send_media/5`.
+  @doc false
   def send_image(pid, jid, data, opts \\ []) when is_binary(data) do
     send_media(pid, jid, :image, data, opts)
   end
@@ -4555,12 +4492,8 @@ defmodule Amarula.Connection do
     :ok
   end
 
-  @doc """
-  Strip a decoded frame's 1-byte prefix, inflating when compressed. Bit 1 (0x02)
-  of the prefix means the remainder is zlib-compressed (Baileys
-  decompressingIfRequired); the server compresses larger frames. Public for
-  testability.
-  """
+  # Internal plumbing; not part of the consumer API.
+  @doc false
   @spec decompress_frame(binary()) :: binary()
   def decompress_frame(<<prefix, rest::binary>>) when Bitwise.band(prefix, 2) == 2 do
     :zlib.uncompress(rest)
