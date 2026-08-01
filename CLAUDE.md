@@ -271,7 +271,7 @@ serialization. Regeneration command: see "Protocol Buffer Compilation" above.
 
 The current WhatsApp Web version must match a version WhatsApp still accepts. Check `../baileys/src/Defaults/index.ts` for Baileys' bundled default:
 ```typescript
-const version = [2, 3000, 1042537629]  // Baileys version
+const version = [2, 3000, 1043857760]  // Baileys version (v7.0.0-rc14)
 ```
 
 Note: Baileys' bundled default can lag the *live* WA Web version and a stale
