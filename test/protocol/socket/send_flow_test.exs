@@ -49,7 +49,7 @@ defmodule Amarula.Protocol.Socket.SendFlowTest do
   defp raw(<<5, k::binary-size(32)>>), do: k
   defp raw(<<k::binary-size(32)>>), do: k
 
-  defp creds do
+  defp creds(me_lid \\ nil) do
     alice = Crypto.generate_key_pair()
 
     %{
@@ -57,7 +57,7 @@ defmodule Amarula.Protocol.Socket.SendFlowTest do
       signed_identity_key: %{public: alice.public, private: alice.private},
       signed_pre_key: %{key_id: 1, key_pair: alice},
       pre_keys: %{},
-      me: %{id: @me_jid, lid: nil, name: "Tester"},
+      me: %{id: @me_jid, lid: me_lid, name: "Tester"},
       account: %Proto.ADVSignedDeviceIdentity{details: <<1, 2, 3>>}
     }
   end
@@ -179,7 +179,7 @@ defmodule Amarula.Protocol.Socket.SendFlowTest do
         frame_sink: self(),
         profile: :test,
         storage: {Amarula.Storage.File, root: dir},
-        auth: creds()
+        auth: creds(context[:me_lid])
       }
       |> maybe_put(:ack_timeout_ms, context[:ack_timeout_ms])
 
@@ -834,6 +834,32 @@ defmodule Amarula.Protocol.Socket.SendFlowTest do
 
     ack(ctx, message.attrs["id"])
     assert {:ok, _msg_id} = await_send_result(task)
+  end
+
+  @tag me_lid: "20000000002@lid"
+  test "a LID-addressed DM enumerates OUR devices by LID too (#64)", ctx do
+    # WhatsApp rejects a stanza that mixes addressing kinds with <ack error="400">.
+    # Replying with `msg.channel` on a LID chat targets @lid, so our own devices
+    # must be enumerated under our LID — not our PN. Baileys does this under its
+    # "ADDRESSING CONSISTENCY" branch; Amarula already did it for groups
+    # (sender_identity/1) but not for 1:1.
+    send_text(ctx, "20000000001@lid", "lid reply")
+
+    usync_iq = recv_frame()
+    assert usync_iq.tag == "iq"
+    assert attr(usync_iq, "xmlns") == "usync"
+
+    queried =
+      usync_iq
+      |> NodeUtils.get_binary_node_child("usync")
+      |> NodeUtils.get_binary_node_child("list")
+      |> Map.get(:content)
+      |> Enum.map(&NodeUtils.get_attr(&1, "jid"))
+
+    # Both the target AND our own identity are queried as LIDs — no PN mixed in.
+    assert "20000000001@lid" in queried
+    assert "20000000002@lid" in queried
+    refute @me_jid in queried
   end
 
   test "force-refreshes sessions for a newly mapped LID (reason=identity)", ctx do

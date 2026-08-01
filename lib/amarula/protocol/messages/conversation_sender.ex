@@ -493,8 +493,23 @@ defmodule Amarula.Protocol.Messages.ConversationSender do
   end
 
   # Our own jid, unless we are the recipient (DM to self).
-  defp own_id_list(%{creds: %{me: %{id: id}}, target_jid: id}), do: []
-  defp own_id_list(%{creds: %{me: %{id: id}}}), do: [id]
+  defp own_id_list(%{target_jid: target} = ctx) do
+    case own_identity(ctx) do
+      ^target -> []
+      id -> [id]
+    end
+  end
+
+  # Our identity IN THE CONVERSATION'S ADDRESSING MODE: our LID for a
+  # lid-addressed target, else our PN. A stanza that mixes kinds — an `@lid`
+  # target with `@s.whatsapp.net` own devices — is rejected with
+  # `<ack error="400">`, so replying with a LID `msg.channel` failed outright (#64).
+  # Mirrors Baileys' "ADDRESSING CONSISTENCY" branch in `relayMessage`, and the
+  # group path's `sender_identity/1` — this is the same rule for 1:1.
+  defp own_identity(%{target_jid: jid, creds: %{me: %{id: id} = me}}) do
+    lid = Map.get(me, :lid)
+    if is_binary(lid) and JID.lid_user?(jid), do: lid, else: id
+  end
 
   defp usync_devices(ctx, users) do
     # USync is a user→devices lookup: the <user jid> must be the bare user jid,
@@ -606,7 +621,10 @@ defmodule Amarula.Protocol.Messages.ConversationSender do
   defp encrypt(%{kind: :dm, devices: devices, message: message, target_jid: jid} = ctx) do
     plaintext = MessageEncoder.encode(message)
     dsm_plaintext = MessageEncoder.encode(device_sent_message(message, jid))
-    own_user = JID.decode(ctx.creds.me.id).user
+    # Same identity `own_id_list/1` enumerated our devices under (#64) — if these
+    # disagree, `own_device?/2` matches nothing and our companion devices get the
+    # plain message instead of the DSM-wrapped copy.
+    own_user = JID.decode(own_identity(ctx)).user
 
     participants =
       Enum.map(devices, fn device ->
