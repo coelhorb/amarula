@@ -91,7 +91,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`:jpeg_thumbnail` option on `send_media/5` for `:document`** ([#65]) — JPEG
   preview bytes for the message bubble; without one the recipient sees a generic
   file icon. Pairs with `:page_count`.
-- **`config :amarula, send_call_timeout: ms`** ([#65]) — the shared
+- **`config :amarula, send_call_timeout_ms: ms`** ([#65]) — the shared
   `GenServer.call` deadline for send/fetch (default 90s, unchanged). Large media
   needs the whole encrypt+upload+relay inside it; raise `:req_options`
   `[receive_timeout:]` alongside. Verified live to 1.75GB.
