@@ -61,8 +61,11 @@ defmodule Amarula.Protocol.Signal.Group.GroupSessionBuilder do
 
         new_state =
           SenderKeyState.new(
-            skdm.id || 0,
-            skdm.iteration || 0,
+            # `id` and `iteration` come off a decoded SenderKeyDistributionMessage,
+            # where they're plain integers (0 when unset) — never nil, so an
+            # `|| 0` fallback here can never fire.
+            skdm.id,
+            skdm.iteration,
             skdm.chain_key,
             %{public: skdm.signature_key, private: nil}
           )

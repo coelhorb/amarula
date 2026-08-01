@@ -347,12 +347,12 @@ defmodule Amarula.Msg do
     }
   end
 
+  # `context_info/1` yields nil or a %ContextInfo{}, whose mentionedJid is always
+  # a list (proto3 repeated field), so these two clauses are total.
   defp mentions(nil), do: []
 
   defp mentions(%Proto.ContextInfo{mentionedJid: jids}) when is_list(jids),
     do: Enum.map(jids, &Address.parse/1)
-
-  defp mentions(_), do: []
 
   # Whether the message was forwarded (ContextInfo.isForwarded, field 22). The
   # proto3-optional field is nil when unset, so only an explicit `true` counts.

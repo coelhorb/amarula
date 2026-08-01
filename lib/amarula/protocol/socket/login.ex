@@ -18,10 +18,13 @@ defmodule Amarula.Protocol.Socket.Login do
 
   @doc """
   Build the ClientHello frame + initial handshake state from creds/config.
-  Returns `{:ok, encoded_frame, handshake_state}` (with `sent_intro` set) or
-  `{:error, reason}`.
+  Always returns `{:ok, encoded_frame, handshake_state}` (with `sent_intro` set) —
+  it is pure key generation plus encoding, with no failure path.
   """
-  @spec client_hello(map(), map()) :: {:ok, binary(), map()} | {:error, term()}
+  # Narrowed to the success tuple only: `Connection` matches it directly, so if a
+  # failure path is ever added here Dialyzer flags that call site instead of it
+  # becoming a MatchError at runtime.
+  @spec client_hello(map(), map()) :: {:ok, binary(), map()}
   def client_hello(auth_creds, config) do
     with {:ok, client_hello_message, handshake_state} <-
            ConnectionValidator.generate_client_hello(auth_creds, config),
@@ -83,10 +86,11 @@ defmodule Amarula.Protocol.Socket.Login do
   # --- internals ---
 
   defp decode_first_frame(handshake_state, data) do
+    # decode_frame/2 only ever returns {:ok, frames, noise} (single return
+    # point, and its spec says so), so these two clauses are total.
     case NoiseHandler.decode_frame(handshake_state.noise_state, data) do
       {:ok, [frame | _], _noise} -> {:ok, frame}
       {:ok, [], _noise} -> {:error, :no_handshake_frame}
-      other -> other
     end
   end
 end
