@@ -273,6 +273,41 @@ defmodule Amarula.Protocol.Socket.ReceiveFlowTest do
       assert Process.alive?(ctx.pid)
     end
 
+    test "a retried MEDIA resend re-derives mediatype onto every enc (479 fix)", ctx do
+      # The retry cache doesn't store enc_attrs, so `resend_from_cache/3` re-derives
+      # them from the message. Without that, a retried media send goes back out in
+      # the shape the server rejects with ack 479 — the original bug, resurrected
+      # only on the retry path (where it's hardest to notice).
+      task =
+        Task.async(fn ->
+          Connection.send_message(ctx.pid, @jid, %Proto.Message{
+            imageMessage: %Proto.Message.ImageMessage{url: "https://x/y", mimetype: "image/jpeg"}
+          })
+        end)
+
+      sent = drain_to_message(ctx)
+      msg_id = sent.attrs["id"]
+      inject(ctx, Node.create("ack", %{"class" => "message", "id" => msg_id}, nil))
+      assert {:ok, ^msg_id} = Task.await(task, 2000)
+
+      inject(ctx, retry_receipt(msg_id, @jid))
+
+      ack = recv_frame()
+      assert ack.tag == "ack"
+
+      resent = drain_to_message(ctx)
+      assert resent.attrs["id"] == msg_id
+
+      encs =
+        resent
+        |> NodeUtils.get_binary_node_child("participants")
+        |> Map.get(:content)
+        |> Enum.map(&NodeUtils.get_binary_node_child(&1, "enc"))
+
+      assert encs != []
+      assert Enum.all?(encs, &(&1.attrs["mediatype"] == "image"))
+    end
+
     test "a retry receipt without an id is acked and otherwise ignored", ctx do
       node =
         Node.create("receipt", %{"from" => @jid, "type" => "retry"}, [
