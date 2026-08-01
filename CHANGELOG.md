@@ -40,6 +40,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Replying to a LID-addressed 1:1 chat no longer fails with `{:error,
+  {:send_rejected, "400"}}`** ([#64]). `msg.channel` is LID-kind for a
+  LID-originated chat, but our own devices were always enumerated by PN — and
+  WhatsApp rejects a stanza that mixes addressing kinds. We now match our identity
+  to the target's mode, as the group path already did.
+
+- **1:1 sends to a contact that hasn't trusted this device are no longer silently
+  dropped** ([#67]). WhatsApp gates them behind a trusted-contact token; without
+  one the socket accepts the frame and the server discards it with ack error 463.
+  Amarula now attaches a held token, issues one after each 1:1 send (and on a 463,
+  never retrying the message — a retry worsens the restriction), ingests tokens
+  pushed as `privacy_token` notifications, and reads the ones the history-sync blob
+  already carried. Also fixes `Profile.picture_url/3` returning `{:ok, nil}` for a
+  privacy-gated contact, which was indistinguishable from "no picture".
+
 - **A stream error with no child tag now reports `"unknown"` instead of an empty
   reason** ([#72]). `get_first_child_tag/1` returns `""`, never `nil`, so the
   `|| "unknown"` fallback could not fire and the blank string reached the log and
@@ -99,6 +114,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `:fire_init_queries` — previously declared but never read (a dead flag); now
     actually gates the post-login props/blocklist/privacy IQ queries.
 
+- **A warning when Android browser mode is enabled** ([#71]). An Android
+  `:browser` registers the device as an Android client rather than WhatsApp Web —
+  deliberate, but previously silent.
+
 - **`Amarula.AppState.force_resync/2` — consumer-initiated app-state resync.**
   Every app-state resync used to be server-triggered only (`server_sync`/
   `account_sync` notifications, or a freshly shared app-state-sync key),
@@ -114,9 +133,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#59]: https://github.com/tubedude/amarula/issues/59
 [#61]: https://github.com/tubedude/amarula/pull/61
 [#62]: https://github.com/tubedude/amarula/issues/62
+[#64]: https://github.com/tubedude/amarula/issues/64
 [#65]: https://github.com/tubedude/amarula/pull/65
+[#67]: https://github.com/tubedude/amarula/issues/67
 [#68]: https://github.com/tubedude/amarula/pull/68
 [#70]: https://github.com/tubedude/amarula/pull/70
+[#71]: https://github.com/tubedude/amarula/pull/71
 [#72]: https://github.com/tubedude/amarula/pull/72
 
 ## [0.5.5] - 2026-07-30
