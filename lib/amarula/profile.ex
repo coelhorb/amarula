@@ -10,15 +10,19 @@ defmodule Amarula.Profile do
   `picture_url/3`, `update_picture/3`, `remove_picture/2`, `update_status/2`.
 
   > #### Picture URL privacy token {: .info}
-  > `picture_url/3` implements the common path. WhatsApp can require a per-contact
-  > privacy token (`tctoken`) for *other* users' pictures; that path is not yet
-  > implemented, so fetching some contacts' pictures may return `nil`. Your own and
-  > group pictures are unaffected.
+  > WhatsApp requires a per-contact privacy token (`tctoken`) to show you *another*
+  > user's picture. `picture_url/3` attaches one automatically when we hold it —
+  > never for your own account (with a token attached the server simply never
+  > replies) and never for a group. With no token held the query still goes out
+  > unadorned, so a contact you have not yet exchanged trust with can still return
+  > `nil`; see `Amarula.Protocol.Signal.TcTokenStore` for how tokens are earned.
   """
 
   alias Amarula.Address
   alias Amarula.Connection
+  alias Amarula.Protocol.Binary.JID
   alias Amarula.Protocol.Profile.Ops
+  alias Amarula.Protocol.Signal.TcTokenStore
 
   @type conn :: GenServer.server()
 
@@ -26,14 +30,33 @@ defmodule Amarula.Profile do
   Fetch the profile-picture URL for `jid` (a user or group). `type` is `:preview`
   (small, default) or `:image` (full). Returns `{:ok, url}`, `{:ok, nil}` when there
   is no picture (or it is not visible to you), or `{:error, reason}`.
+
+  A held trusted-contact token is attached automatically — see the module note.
   """
   @spec picture_url(conn(), String.t() | Address.t(), Ops.pic_type()) ::
           {:ok, String.t() | nil} | {:error, term()}
   def picture_url(conn, jid, type \\ :preview) do
-    target = Address.to_jid!(jid)
+    addr = Address.parse!(jid)
+    target = Address.to_jid!(addr)
+    query = Ops.picture_url_query(target, type, picture_tctoken(conn, addr, target))
 
-    with {:ok, reply} <- Connection.query_iq(conn, Ops.picture_url_query(target, type)) do
+    with {:ok, reply} <- Connection.query_iq(conn, query) do
       {:ok, Ops.parse_url(reply)}
+    end
+  end
+
+  # Baileys gates the picture tctoken on "user jid, and not ourselves"
+  # (`Socket/chats.ts` `profilePictureUrl`). The self case is not an optimization:
+  # WA Web has no tcToken for your own chat, and sending one makes the server
+  # never answer the IQ at all — the caller would just time out.
+  #
+  # The cheap jid check comes first so a group lookup costs no extra round-trip
+  # to the connection process (both helpers below are GenServer calls).
+  defp picture_tctoken(conn, %Address{} = addr, target) do
+    if JID.jid_user?(target) and not own_account?(conn, addr) do
+      conn |> Connection.get_conn() |> TcTokenStore.token_children(target)
+    else
+      []
     end
   end
 

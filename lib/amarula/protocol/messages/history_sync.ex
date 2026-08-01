@@ -78,6 +78,13 @@ defmodule Amarula.Protocol.Messages.HistorySync do
   alias Amarula.Protocol.Messages.Media
   alias Amarula.Protocol.Proto
 
+  @type tc_token :: %{
+          jid: String.t(),
+          token: binary(),
+          timestamp: non_neg_integer(),
+          sender_timestamp: non_neg_integer() | nil
+        }
+
   @type result :: %{
           sync_type: atom(),
           chats: [Chat.t()],
@@ -85,7 +92,8 @@ defmodule Amarula.Protocol.Messages.HistorySync do
           push_names: [{String.t(), String.t()}],
           messages: [Msg.t()],
           status_messages: [Msg.t()],
-          lid_mappings: [{String.t(), String.t()}]
+          lid_mappings: [{String.t(), String.t()}],
+          tc_tokens: [tc_token()]
         }
 
   @doc """
@@ -142,9 +150,44 @@ defmodule Amarula.Protocol.Messages.HistorySync do
       push_names: for(p <- sync.pushnames || [], p.pushname, do: {p.id, p.pushname}),
       messages: Enum.flat_map(convos, &messages/1),
       status_messages: Enum.flat_map(sync.statusV3Messages || [], &msg/1),
-      lid_mappings: lid_mappings(sync, convos)
+      lid_mappings: lid_mappings(sync, convos),
+      tc_tokens: Enum.flat_map(convos, &tc_token/1)
     }
   end
+
+  # Trusted-contact privacy tokens the phone already holds, carried per
+  # conversation (Baileys `storeTcTokensFromHistorySync`). This is the bulk
+  # source: without it a freshly linked device knows no tokens and has to earn
+  # one contact at a time off rejected sends. Decoding only — persisting is
+  # `TcTokenStore.store_history_sync/2`'s job, so this module stays free of any
+  # storage dependency.
+  #
+  # A token with no timestamp is dropped: the expiry window is computed from it,
+  # so a timestamp-less token would read as immediately expired anyway.
+  defp tc_token(%{id: id, tcToken: token, tcTokenTimestamp: ts} = convo)
+       when is_binary(id) and is_binary(token) and token != "" do
+    case to_unix(ts) do
+      nil ->
+        []
+
+      seconds ->
+        [
+          %{
+            jid: JID.jid_normalized_user(id),
+            token: token,
+            timestamp: seconds,
+            sender_timestamp: to_unix(Map.get(convo, :tcTokenSenderTimestamp))
+          }
+        ]
+    end
+  end
+
+  defp tc_token(_convo), do: []
+
+  # `nil` for an absent or zero timestamp: the proto3_optional field is nil when
+  # unset, and 0 is the same as unset for our purposes (Baileys' `ts > 0` guard).
+  defp to_unix(n) when is_integer(n) and n > 0, do: n
+  defp to_unix(_), do: nil
 
   # LID↔PN pairs carried by the blob, from the three places Baileys reads them
   # (`processHistoryMessage`). Emitted as `{lid, pn}` candidates — orientation and

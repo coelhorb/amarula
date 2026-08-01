@@ -830,7 +830,13 @@ defmodule Amarula.Protocol.Socket.SendFlowTest do
     inject(ctx, bundle_reply(attr(bundle_iq, "id")))
     message = recv_frame()
 
-    assert %Node{content: ^token} = NodeUtils.get_binary_node_child(message, "tctoken")
+    assert %Node{content: ^token} = tctoken = NodeUtils.get_binary_node_child(message, "tctoken")
+
+    # The message stanza's tctoken carries NO attrs — in particular no `t`.
+    # Baileys builds this one inline (`messages-send.ts`), while the profile
+    # picture and presence-subscribe tokens go through `buildTcTokenFromJid`,
+    # which stamps `t` (v7.0.0-rc14, #2607). Keep the two shapes apart.
+    assert tctoken.attrs == %{}
 
     ack(ctx, message.attrs["id"])
     assert {:ok, _msg_id} = await_send_result(task)

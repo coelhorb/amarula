@@ -27,6 +27,37 @@ defmodule Amarula.Protocol.Profile.OpsTest do
       iq = Ops.picture_url_query(@target, :image)
       assert NodeUtils.get_attr(child(iq), "type") == "image"
     end
+
+    test "with no tctoken the <picture> node stays childless" do
+      assert Ops.picture_url_query(@target, :preview, []) == Ops.picture_url_query(@target)
+      assert child(Ops.picture_url_query(@target)).content == nil
+    end
+
+    # Baileys shipped the tctoken as a SIBLING of <picture> and corrected it to
+    # nested in v7.0.0-rc14 (#2607). A sibling makes the server ignore the token,
+    # so the picture comes back empty — indistinguishable from "no picture".
+    test "the tctoken nests INSIDE <picture>, not beside it" do
+      tctoken = Node.create("tctoken", %{"t" => "1770000000"}, <<4, 1, 33>>)
+      iq = Ops.picture_url_query(@target, :image, [tctoken])
+
+      assert [%Node{tag: "picture"} = picture] = iq.content
+      assert picture.content == [tctoken]
+      assert NodeUtils.get_attr(picture, "type") == "image"
+      assert NodeUtils.get_attr(picture, "query") == "url"
+
+      refute NodeUtils.get_binary_node_child(iq, "tctoken"),
+             "tctoken must not be a sibling of <picture>"
+    end
+
+    test "the nested tctoken carries its issue timestamp as the `t` attr" do
+      tctoken = Node.create("tctoken", %{"t" => "1770000000"}, <<4, 1, 33>>)
+      iq = Ops.picture_url_query(@target, :preview, [tctoken])
+
+      assert %Node{content: [nested]} = child(iq)
+      assert nested.tag == "tctoken"
+      assert NodeUtils.get_attr(nested, "t") == "1770000000"
+      assert nested.content == <<4, 1, 33>>
+    end
   end
 
   describe "set_picture/2 and remove_picture/1 target handling" do

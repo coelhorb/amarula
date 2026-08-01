@@ -34,6 +34,19 @@ defmodule Amarula.ProfileTest do
     {:ok, pid: pid}
   end
 
+  # Seed a held trusted-contact token for `jid`, through the connection's own
+  # storage scope. With no LID mapping on file the storage key is just the
+  # account-level jid (TcTokenStore.storage_jid/2).
+  defp put_tctoken(ctx, jid, timestamp) do
+    conn = Amarula.Connection.get_conn(ctx.pid)
+
+    :ok =
+      Amarula.Storage.put(conn.storage, conn.profile, :tctoken, jid, %{
+        token: "trusted-contact-token",
+        timestamp: timestamp
+      })
+  end
+
   # Run `fun` (a blocking Profile call) in a Task, answer the outbound IQ with
   # `reply_fun.(iq)`, and return {result, iq} so the test can assert both sides.
   defp round_trip(pid, fun, reply_fun) do
@@ -125,6 +138,72 @@ defmodule Amarula.ProfileTest do
         )
 
       assert {:error, %Node{}} = result
+    end
+  end
+
+  describe "picture_url/3 trusted-contact token" do
+    test "a held token is nested inside <picture> with its `t` attr", ctx do
+      ts = System.system_time(:second)
+      put_tctoken(ctx, @other_jid, ts)
+
+      {result, iq} =
+        round_trip(
+          ctx.pid,
+          fn -> Profile.picture_url(ctx.pid, @other_jid) end,
+          fn iq -> picture_reply(iq_id(iq), @pic_url) end
+        )
+
+      picture = NodeUtils.get_binary_node_child(iq, "picture")
+      assert [tctoken] = picture.content
+      assert tctoken.tag == "tctoken"
+      assert NodeUtils.get_attr(tctoken, "t") == Integer.to_string(ts)
+      assert tctoken.content == "trusted-contact-token"
+
+      # Nested, never a sibling — that was Baileys' bug, fixed in rc14 (#2607).
+      refute NodeUtils.get_binary_node_child(iq, "tctoken")
+      assert result == {:ok, @pic_url}
+    end
+
+    # Not an optimization: WA Web holds no tcToken for your own chat, and sending
+    # one makes the server never answer the IQ — the caller would just time out.
+    test "our own jid never carries a token, even with one on file", ctx do
+      put_tctoken(ctx, @me_jid, System.system_time(:second))
+
+      {_result, iq} =
+        round_trip(
+          ctx.pid,
+          fn -> Profile.picture_url(ctx.pid, @me_jid) end,
+          fn iq -> picture_reply(iq_id(iq), @pic_url) end
+        )
+
+      assert NodeUtils.get_binary_node_child(iq, "picture").content == nil
+    end
+
+    test "a group never carries a token", ctx do
+      put_tctoken(ctx, @group_jid, System.system_time(:second))
+
+      {_result, iq} =
+        round_trip(
+          ctx.pid,
+          fn -> Profile.picture_url(ctx.pid, @group_jid) end,
+          fn iq -> picture_reply(iq_id(iq), @pic_url) end
+        )
+
+      assert NodeUtils.get_binary_node_child(iq, "picture").content == nil
+    end
+
+    test "an expired token is dropped and the query goes out unadorned", ctx do
+      # Four 7-day buckets back is outside the ~28-day window.
+      put_tctoken(ctx, @other_jid, System.system_time(:second) - 4 * 604_800)
+
+      {_result, iq} =
+        round_trip(
+          ctx.pid,
+          fn -> Profile.picture_url(ctx.pid, @other_jid) end,
+          fn iq -> picture_reply(iq_id(iq), @pic_url) end
+        )
+
+      assert NodeUtils.get_binary_node_child(iq, "picture").content == nil
     end
   end
 

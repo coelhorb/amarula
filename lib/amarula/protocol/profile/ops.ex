@@ -23,13 +23,20 @@ defmodule Amarula.Protocol.Profile.Ops do
   @doc """
   Fetch a profile picture URL. `target` is the jid to look up (a user or group jid);
   `type` is `:preview` (small) or `:image` (full). Reply parsed by `parse_url/1`.
+
+  `tctoken_children` is the trusted-contact token to prove we may see this
+  contact's picture (`TcTokenStore.token_children/2`), or `[]` for the common
+  case. It goes **inside** the `<picture>` node, not beside it — Baileys shipped
+  it as a sibling and corrected it to nested in v7.0.0-rc14 (#2607). Callers
+  decide whether a token applies at all; see `Amarula.Profile.picture_url/3`.
   """
-  @spec picture_url_query(String.t(), pic_type()) :: Node.t()
-  def picture_url_query(target, type \\ :preview) when type in [:preview, :image] do
+  @spec picture_url_query(String.t(), pic_type(), [Node.t()]) :: Node.t()
+  def picture_url_query(target, type \\ :preview, tctoken_children \\ [])
+      when type in [:preview, :image] and is_list(tctoken_children) do
     picture = %Node{
       tag: "picture",
       attrs: %{"type" => Atom.to_string(type), "query" => "url"},
-      content: nil
+      content: if(tctoken_children == [], do: nil, else: tctoken_children)
     }
 
     iq("get", @xmlns_picture, maybe_target(target), [picture])
