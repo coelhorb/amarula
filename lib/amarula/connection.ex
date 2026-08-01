@@ -73,6 +73,13 @@ defmodule Amarula.Connection do
   alias Amarula.Connection.{SendOps, GroupOps, PreKeyOps, Pairing, Notifications, Receive}
   alias Amarula.Connection.{AppStateOps, AckLifecycle}
 
+  # This is the per-connection coordinator: one process owning the websocket,
+  # Noise state, IQ correlation, ack parking, and several in-flight task maps (see
+  # the moduledoc). The fields are cohesive, and grouping them into sub-maps would
+  # churn every `state.x` access across this module for no behavioural gain. The
+  # check guards Erlang's 32-key flatmap→hashmap switch, which this struct passed
+  # long before the current count — so the representation is unchanged either way.
+  # credo:disable-for-next-line Credo.Check.Warning.StructFieldAmount
   defstruct [
     :websocket_client,
     :websocket_monitor,
