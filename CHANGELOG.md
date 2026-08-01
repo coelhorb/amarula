@@ -28,6 +28,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (HIGH) and `plug`. `mix hex.audit` now reports nothing on a fresh resolve; it
   reported 14 advisories before.
 
+### Changed
+
+- **Pinned WhatsApp Web version bumped to `2.3000.1044303277`** ([#70]). The pin
+  must track a version WhatsApp still accepts; when it goes stale the failure is
+  quiet and misleading — the QR / pairing code generates, the phone reports
+  *"Couldn't link device"*, `:pairing_success` never fires, and the socket 408s and
+  retries identically. The previous pin had drifted well behind the live revision,
+  so **new-device pairing was affected**; already-paired sessions were not. (The pin
+  can still be overridden without recompiling via `AMARULA_WA_VERSION`.)
+
 ### Fixed
 
 - **Media sends no longer fail with `{:error, {:send_rejected, "479"}}`** ([#61]).
@@ -91,6 +101,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#61]: https://github.com/tubedude/amarula/pull/61
 [#62]: https://github.com/tubedude/amarula/issues/62
 [#68]: https://github.com/tubedude/amarula/pull/68
+[#70]: https://github.com/tubedude/amarula/pull/70
 
 ## [0.5.5] - 2026-07-30
 
