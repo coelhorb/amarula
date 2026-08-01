@@ -72,9 +72,14 @@ defmodule Amarula.Protocol.AppState.PatchTest do
 
   test "skips a record with a bad value MAC", %{keys: keys, get_key: gk} do
     mut = set_mutation(["x"], %Proto.SyncActionValue{}, keys)
-    # Corrupt the trailing value MAC.
+
+    # Corrupt the trailing value MAC. FLIP the last byte rather than writing <<0>>:
+    # the blob ends in the HMAC, so its last byte is uniformly random and was
+    # already 0 about 1 run in 256 — making the "corruption" a no-op, leaving the
+    # MAC valid, and failing this test at that rate. Flipping always changes it.
     blob = mut.record.value.blob
-    bad = binary_part(blob, 0, byte_size(blob) - 1) <> <<0>>
+    flipped = Bitwise.bxor(:binary.last(blob), 0xFF)
+    bad = binary_part(blob, 0, byte_size(blob) - 1) <> <<flipped>>
     mut = put_in(mut.record.value.blob, bad)
 
     {:ok, mutations, _state} = Patch.decode_mutations([mut], Patch.new_state(), gk)
