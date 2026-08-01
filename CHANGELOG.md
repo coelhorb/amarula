@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.6] - 2026-08-01
+
+> **Media sends were broken in every release up to 0.5.5** — if you send media,
+> upgrade. Text sending was unaffected.
+
 ### Fixed
 
 - **Media sends no longer fail with `{:error, {:send_rejected, "479"}}`** ([#61]).
@@ -1053,7 +1058,8 @@ First public release.
   the supervision tree down and frees the profile slot). The server-side
   device-unlink now lives only in `wipe_credentials/1`.
 
-[Unreleased]: https://github.com/tubedude/amarula/compare/v0.5.5...HEAD
+[Unreleased]: https://github.com/tubedude/amarula/compare/v0.5.6...HEAD
+[0.5.6]: https://github.com/tubedude/amarula/compare/v0.5.5...v0.5.6
 [0.5.5]: https://github.com/tubedude/amarula/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/tubedude/amarula/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/tubedude/amarula/compare/v0.5.2...v0.5.3
