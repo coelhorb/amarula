@@ -68,12 +68,22 @@ defmodule Amarula.Connection.SendOps do
   """
   @spec media(term(), struct()) :: build()
   def media(jid, message) do
-    # Tag the stanza with its `mediatype` (Baileys `getMediaType`). Required for
-    # view-once video/audio — WhatsApp silently drops them otherwise (#2435/#2678).
+    # A media message is NOT `type="text"` with a `mediatype` hint on <message> —
+    # the server rejects that shape with ack error 479 ("smax-invalid"). The
+    # accepted wire shape (verified against a live whatsmeow document send, and
+    # whatsmeow send.go getTypeFromMessage / encAttrs): `type="media"` on the
+    # <message> node, and `mediatype` on EVERY per-device <enc> child.
     payload =
       case MessageContent.media_type(message) do
-        nil -> %{message: message}
-        type -> %{message: message, stanza_attrs: %{"mediatype" => type}}
+        nil ->
+          %{message: message}
+
+        type ->
+          %{
+            message: message,
+            stanza_attrs: %{"type" => "media"},
+            enc_attrs: %{"mediatype" => type}
+          }
       end
 
     {jid, payload, &default_send_reply/2}

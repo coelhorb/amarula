@@ -2139,8 +2139,17 @@ defmodule Amarula.Connection do
         # rather than duplicates). A fresh ConversationSender pass picks up the
         # session the retry's <keys> bundle just injected. Replay the original
         # stanza_attrs so a peer/edit stanza keeps its category/edit on resend.
+        # Per-enc attrs aren't cached — re-derive them from the message itself
+        # (deterministic), so a retried MEDIA resend keeps its `mediatype` and
+        # the server doesn't 479 the retry.
         # Fire-and-forget: no caller is waiting, so `from` is nil.
-        payload = %{msg_id: msg_id, message: message, stanza_attrs: stanza_attrs}
+        enc_attrs =
+          case MessageContent.media_type(message) do
+            nil -> %{}
+            type -> %{"mediatype" => type}
+          end
+
+        payload = %{msg_id: msg_id, message: message, stanza_attrs: stanza_attrs, enc_attrs: enc_attrs}
         deliver_async(state, recipient, payload, nil)
 
       nil ->

@@ -435,6 +435,11 @@ defmodule Amarula.Protocol.Messages.MessageEncoder do
   end
 
   defp media_message(:document, common, opts) do
+    # accept the documented snake_case option (`file_name`, amarula.ex @send_media_opts)
+    # as well as the proto-cased key — the public API name silently produced a
+    # documentMessage with NO fileName, which clients render as "Untitled"
+    opts = Keyword.put_new(opts, :fileName, Keyword.get(opts, :file_name))
+
     %Proto.Message{
       documentMessage:
         struct(
