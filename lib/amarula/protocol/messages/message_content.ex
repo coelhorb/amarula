@@ -56,9 +56,10 @@ defmodule Amarula.Protocol.Messages.MessageContent do
   `getMediaType`), unwrapping view-once/ephemeral envelopes first. Returns `nil` for
   a message that carries no media type (plain text, etc.).
 
-  WhatsApp expects this attribute on the `<message>` stanza for media and **silently
-  drops view-once video/audio sent without it** (the media is nested inside a
-  `viewOnceMessage`, so a naive top-level check misses it) — see #2435 / issue #2678.
+  WhatsApp expects this attribute on every per-device `<enc>` (the single `skmsg`
+  `<enc>` for groups) and **silently drops view-once video/audio sent without it**
+  (the media is nested inside a `viewOnceMessage`, so a naive top-level check misses
+  it) — see #2435 / issue #2678.
   """
   @spec media_type(Proto.Message.t()) :: String.t() | nil
   def media_type(%Proto.Message{} = message) do

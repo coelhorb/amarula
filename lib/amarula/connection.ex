@@ -1000,7 +1000,10 @@ defmodule Amarula.Connection do
     names = if names == :all, do: Amarula.Protocol.AppState.Sync.collections(), else: names
     Logger.debug("Force-resyncing app-state collection(s): #{inspect(names)}")
     Enum.each(names, &reset_collection_state(state, &1))
-    {:noreply, resync_app_state(state, names)}
+    # Bypasses the `:sync_app_state` gate on purpose: that flag suppresses the
+    # automatic triggers, and this reset already wiped the local versions — going
+    # through the gate would leave them at 0 with no request sent.
+    {:noreply, do_resync_app_state(state, names)}
   end
 
   # Ignore events from a websocket we've already replaced (e.g. after a 515
@@ -4220,23 +4223,24 @@ defmodule Amarula.Connection do
   # new state, emit changes. A server_sync notification names ONE collection, so
   # we resync just that one (Baileys: resyncAppState([name])) rather than hammer
   # the server with all five.
+  # `:sync_app_state` gates the AUTOMATIC triggers (server_sync/account_sync/
+  # key-share) — #59. Shared keys are still stored upstream, so re-enabling later
+  # works. An explicit `AppState.force_resync/2` is the consumer asking for one
+  # anyway, so it calls `do_resync_app_state/2` and bypasses this.
   defp resync_app_state(state, names \\ Sync.collections()) do
-    # Gated at the function so every trigger (server_sync/account_sync/key-share)
-    # honours the opt-out (#59). Shared keys are still stored upstream, so
-    # re-enabling later works.
-    if sync_app_state?(state.config) do
-      collections =
-        Enum.map(names, fn name ->
-          st = load_collection_state(state, name)
-          {name, st.version, st.version == 0}
-        end)
+    if sync_app_state?(state.config), do: do_resync_app_state(state, names), else: state
+  end
 
-      iq = Sync.request_iq(collections)
-      # Tracked (not blocking): the reply continues in handle_tracked_iq(:app_state_sync).
-      send_tracked_iq(state, iq, :app_state_sync)
-    else
-      state
-    end
+  defp do_resync_app_state(state, names) do
+    collections =
+      Enum.map(names, fn name ->
+        st = load_collection_state(state, name)
+        {name, st.version, st.version == 0}
+      end)
+
+    iq = Sync.request_iq(collections)
+    # Tracked (not blocking): the reply continues in handle_tracked_iq(:app_state_sync).
+    send_tracked_iq(state, iq, :app_state_sync)
   end
 
   defp apply_app_state_reply(state, reply) do

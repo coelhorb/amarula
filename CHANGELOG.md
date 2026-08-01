@@ -55,7 +55,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`send_media/5` documents now carry their file name** ([#61]). The documented
   option is snake_case `:file_name`, but the document builder only read `:fileName`
   — so `documentMessage.fileName` was always `nil` and every document arrived
-  untitled. Both spellings are accepted now.
+  untitled. Use the documented `:file_name`; the proto-cased `:fileName` is not an
+  accepted option.
 - **Three `send_media/5` options were unreachable and now work** ([#62]). The
   builders read `:gifPlayback`, `:isAnimated` and `:pageCount`, but `send_media/5`
   validates against a strict schema that **rejects unknown keys** — so the only

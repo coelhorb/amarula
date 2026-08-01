@@ -507,6 +507,19 @@ defmodule Amarula.Protocol.Socket.ReceiveFlowTest do
     end
 
     @tag config: %{sync_app_state: false}
+    test "force_resync still sends its IQ with sync_app_state: false", ctx do
+      # The flag suppresses the AUTOMATIC triggers; an explicit force_resync is the
+      # consumer asking anyway. It resets local versions to 0 first, so honouring
+      # the gate here would wipe them and send nothing.
+      Amarula.AppState.force_resync(ctx.pid, ["regular_high"])
+
+      iq = recv_frame()
+      assert iq.tag == "iq"
+      assert attr(iq, "xmlns") == "w:sync:app:state"
+      assert Process.alive?(ctx.pid)
+    end
+
+    @tag config: %{sync_app_state: false}
     test "server_sync with sync_app_state: false acks but sends no resync IQ (#59)", ctx do
       node =
         Node.create(

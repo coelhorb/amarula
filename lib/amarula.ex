@@ -1195,7 +1195,7 @@ defmodule Amarula do
                        jpeg_thumbnail: [
                          type: :string,
                          doc:
-                           "small JPEG preview bytes rendered in the bubble (official clients embed a page-1/downscale thumbnail; without it the recipient sees a generic icon). Keep it small (tens of KB)."
+                           "for `:document`, small JPEG preview bytes rendered in the bubble (without one the recipient sees a generic icon). Keep it small (tens of KB)."
                        ],
                        gif_playback: [
                          type: :boolean,
