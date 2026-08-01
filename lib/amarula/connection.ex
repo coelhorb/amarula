@@ -625,6 +625,7 @@ defmodule Amarula.Connection do
     # `instance_id` addresses the per-connection Registry + sender supervisor.
     conn = normalize_conn(arg)
     config = conn.config
+    warn_if_android(config)
 
     # A Connection-owned Task.Supervisor for off-process work (media prep,
     # history-sync downloads). Started LINKED here so it dies with this Connection
@@ -4389,6 +4390,21 @@ defmodule Amarula.Connection do
 
   defp normalize_conn(config) when is_map(config) do
     config |> Map.put_new(:profile, :default) |> Amarula.Conn.new()
+  end
+
+  # Android registration is a newer, less-exercised WhatsApp path; upstream
+  # labels it experimental and warns on every socket (Baileys `Socket/socket.ts`).
+  # Opting in is deliberate — see the `:browser` notes in `Amarula.Config` — but
+  # it changes how the device is registered, so it should never be silent.
+  defp warn_if_android(config) do
+    if AuthUtils.android?(Map.get(config, :browser)) do
+      Logger.warning(
+        "Android browser mode is experimental: this device registers as an Android " <>
+          "client, not WhatsApp Web. Use at your own risk."
+      )
+    end
+
+    :ok
   end
 
   @doc """

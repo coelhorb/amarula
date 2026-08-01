@@ -293,11 +293,17 @@ defmodule Amarula.Protocol.Auth.AuthUtils do
     end
   end
 
-  # An "android" browser (the second element of the browser triple contains
-  # "android", case-insensitive) opts the connection into Android-client
-  # registration instead of WhatsApp Web. Mirrors Baileys
-  # (`browser[1].toLocaleLowerCase().includes('android')`).
-  defp android?(browser) do
+  @doc """
+  Whether this `:browser` triple opts the connection into Android-client
+  registration instead of WhatsApp Web — true when its second element contains
+  "android", case-insensitively. Mirrors Baileys'
+  `browser[1].toLocaleLowerCase().includes('android')`.
+
+  Public because `Amarula.Connection` warns on it at startup; the payload
+  builders above are the substantive readers.
+  """
+  @spec android?(list(String.t()) | nil) :: boolean()
+  def android?(browser) do
     name = browser && Enum.at(browser, 1)
     is_binary(name) and String.contains?(String.downcase(name), "android")
   end
