@@ -105,6 +105,18 @@ defmodule Amarula.Examples.Connection do
     config = config(opts)
     profile = config.profile
 
+    # Amarula no longer auto-starts its shared tree (0.5.0+) — a real app adds
+    # `Amarula.Supervisor` once, itself, before any connection. These example
+    # scripts have no such app, so start it here. A second Connection in the same
+    # `iex -S mix` session gets {:error, {:already_started, _}} — the tree is up,
+    # which is all we need. Anything else matches no clause and takes this init
+    # down: better a loud CaseClauseError naming the actual return than a
+    # confusing failure later from a tree that never started.
+    case Amarula.Supervisor.start_link() do
+      {:ok, _pid} -> :ok
+      {:error, {:already_started, _pid}} -> :ok
+    end
+
     # parent_pid: self() routes every {:amarula, _, _} event to handle_info/2.
     # Attach any plugins (Req-style) before connecting; a plugin's opts get this
     # GenServer pid as :server so it can respond through us.
