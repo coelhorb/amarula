@@ -59,6 +59,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `:fire_init_queries` — previously declared but never read (a dead flag); now
     actually gates the post-login props/blocklist/privacy IQ queries.
 
+- **`Amarula.AppState.force_resync/2` — consumer-initiated app-state resync.**
+  Every app-state resync used to be server-triggered only (`server_sync`/
+  `account_sync` notifications, or a freshly shared app-state-sync key),
+  always resuming from whatever version is stored locally. There was no way
+  for a consumer app to ask for a fresh resync itself. This adds that lever:
+  it resets the named collections (default: all) to a clean, version-0 state
+  and re-requests them as a full snapshot — the same request shape as a
+  first-ever sync — rather than resuming from a version that may have drifted
+  (e.g. after `Sync.decode_collection/5` reported repeated MAC mismatches and
+  truncated batches). Fire-and-forget; results land as the usual
+  `:chats_update`/`:contacts_update` events.
+
 [#59]: https://github.com/tubedude/amarula/issues/59
 [#61]: https://github.com/tubedude/amarula/pull/61
 [#62]: https://github.com/tubedude/amarula/issues/62
