@@ -466,6 +466,12 @@ defmodule Amarula.Protocol.Messages.MessageEncoderTest do
       assert MessageEncoder.media(:video, @info, seconds: 3).videoMessage.seconds == 3
       assert MessageEncoder.media(:audio, @info, seconds: 5, ptt: true).audioMessage.ptt == true
       assert MessageEncoder.media(:document, @info, title: "t").documentMessage.title == "t"
+
+      # the PUBLIC option is snake_case `file_name` (@send_media_opts) — it must
+      # reach documentMessage.fileName (it used to be silently dropped)
+      assert MessageEncoder.media(:document, @info, file_name: "invoice.pdf").documentMessage.fileName ==
+               "invoice.pdf"
+
       assert MessageEncoder.media(:sticker, @info).stickerMessage.url == "https://x/y"
     end
 

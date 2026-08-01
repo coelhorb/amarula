@@ -46,11 +46,15 @@ defmodule Amarula.Connection.SendOpsTest do
       assert shape.(:ok, "MID") == {:ok, "MID"}
     end
 
-    test "media tags the stanza with its mediatype (#2435)" do
+    test "media stamps type=media on <message> and mediatype on the encs (#2435, 479 fix)" do
       msg = %Proto.Message{imageMessage: %Proto.Message.ImageMessage{}}
       {_t, payload, _s} = SendOps.media("123@s.whatsapp.net", msg)
 
-      assert payload == %{message: msg, stanza_attrs: %{"mediatype" => "image"}}
+      assert payload == %{
+               message: msg,
+               stanza_attrs: %{"type" => "media"},
+               enc_attrs: %{"mediatype" => "image"}
+             }
     end
 
     test "media tags a view-once wrapper by its inner type (#2678)" do
@@ -58,7 +62,8 @@ defmodule Amarula.Connection.SendOpsTest do
       msg = %Proto.Message{viewOnceMessage: %Proto.Message.FutureProofMessage{message: inner}}
       {_t, payload, _s} = SendOps.media("123@s.whatsapp.net", msg)
 
-      assert payload.stanza_attrs == %{"mediatype" => "video"}
+      assert payload.stanza_attrs == %{"type" => "media"}
+      assert payload.enc_attrs == %{"mediatype" => "video"}
     end
   end
 

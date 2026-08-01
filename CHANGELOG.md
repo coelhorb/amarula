@@ -5,6 +5,29 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Media sends no longer fail with `{:error, {:send_rejected, "479"}}`** ([#61]).
+  Every `send_media/5` — image, video, audio, document, sticker — was rejected by
+  the server with ack error 479 (`smax-invalid`), while text sends on the same
+  session delivered fine. The upload succeeded and the message encrypted and
+  relayed; the rejection arrived milliseconds later, so nothing surfaced until the
+  ack. The stanza shape was wrong in two ways: the `<message>` node carried
+  `type="text"` (media needs `type="media"`), and the `mediatype` hint was an
+  attribute of `<message>` when it belongs on **every per-device `<enc>`** — on the
+  single `skmsg` `<enc>` for groups. Both are now emitted correctly, including on
+  the retry-resend path (the attrs aren't cached, so they're re-derived from the
+  message). Verified against Baileys `messages-send.ts` (`createParticipantNodes`
+  and `getMessageType`) and a live whatsmeow capture.
+- **`send_media/5` documents now carry their file name** ([#61]). The documented
+  option is snake_case `:file_name`, but the document builder only read `:fileName`
+  — so `documentMessage.fileName` was always `nil` and every document arrived
+  untitled. Both spellings are accepted now.
+
+[#61]: https://github.com/tubedude/amarula/pull/61
+
 ## [0.5.5] - 2026-07-30
 
 ### Fixed

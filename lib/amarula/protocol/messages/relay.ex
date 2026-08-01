@@ -74,8 +74,16 @@ defmodule Amarula.Protocol.Messages.Relay do
   def build_multi_device_stanza(_msg_id, _to, [], _account, _opts), do: {:error, :no_participants}
 
   def build_multi_device_stanza(msg_id, to, participants, account, opts) do
+    # media sends stamp `mediatype` on EVERY per-device <enc> (whatsmeow
+    # send.go encAttrs; the server 479s "smax-invalid" without it)
+    enc_attrs = Keyword.get(opts, :enc_attrs, %{})
+
     participants_node =
-      Node.create("participants", %{}, Enum.map(participants, &participant_to_node/1))
+      Node.create(
+        "participants",
+        %{},
+        Enum.map(participants, &participant_to_node(&1, enc_attrs))
+      )
 
     children = [participants_node] ++ maybe_device_identity(any_pkmsg?(participants), account)
 
@@ -125,10 +133,13 @@ defmodule Amarula.Protocol.Messages.Relay do
   def build_group_stanza(msg_id, to, skmsg, participants, account, opts) do
     ts = Keyword.get(opts, :timestamp, System.system_time(:second))
 
-    skmsg_enc = Node.create("enc", %{"v" => "2", "type" => "skmsg"}, skmsg)
+    # groups carry `mediatype` on the single skmsg enc, NOT the per-device SKDM
+    # encs (whatsmeow send.go: "for groups it's in the skmsg node")
+    enc_attrs = Keyword.get(opts, :enc_attrs, %{})
+    skmsg_enc = Node.create("enc", Map.merge(%{"v" => "2", "type" => "skmsg"}, enc_attrs), skmsg)
 
     participants_node =
-      Node.create("participants", %{}, Enum.map(participants, &participant_to_node/1))
+      Node.create("participants", %{}, Enum.map(participants, &participant_to_node(&1, %{})))
 
     children =
       [skmsg_enc, participants_node] ++ maybe_device_identity(any_pkmsg?(participants), account)
@@ -143,8 +154,9 @@ defmodule Amarula.Protocol.Messages.Relay do
     {:ok, stanza}
   end
 
-  defp participant_to_node({jid, enc_type, ciphertext}) do
-    enc = Node.create("enc", %{"v" => "2", "type" => Atom.to_string(enc_type)}, ciphertext)
+  defp participant_to_node({jid, enc_type, ciphertext}, enc_attrs) do
+    attrs = Map.merge(%{"v" => "2", "type" => Atom.to_string(enc_type)}, enc_attrs)
+    enc = Node.create("enc", attrs, ciphertext)
     Node.create("to", %{"jid" => jid}, [enc])
   end
 
