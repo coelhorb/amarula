@@ -112,13 +112,21 @@ defmodule Amarula.Protocol.Presence do
 
   defp last_seen(_attrs), do: nil
 
-  @doc "A `<presence type=subscribe>` stanza for `to_jid` (tcToken omitted)."
-  @spec subscribe(String.t(), String.t()) :: Node.t()
-  def subscribe(to_jid, id) do
+  @doc """
+  A `<presence type=subscribe>` stanza for `to_jid`.
+
+  `tctoken_children` is the trusted-contact token proving we may subscribe to
+  this contact (`Amarula.Protocol.Signal.TcTokenStore.token_children/2`), or `[]`.
+  Unlike the profile-picture query it sits at the **top level** of the stanza
+  rather than nested — Baileys passes it straight through as the stanza content
+  (`Socket/chats.ts` `presenceSubscribe`).
+  """
+  @spec subscribe(String.t(), String.t(), [Node.t()]) :: Node.t()
+  def subscribe(to_jid, id, tctoken_children \\ []) when is_list(tctoken_children) do
     %Node{
       tag: "presence",
       attrs: %{"to" => to_jid, "id" => id, "type" => "subscribe"},
-      content: nil
+      content: if(tctoken_children == [], do: nil, else: tctoken_children)
     }
   end
 

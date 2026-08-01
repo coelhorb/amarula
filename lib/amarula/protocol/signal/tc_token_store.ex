@@ -27,6 +27,19 @@ defmodule Amarula.Protocol.Signal.TcTokenStore do
        retrying a 463'd send only compounds the restriction (see Baileys'
        `handleBadAck` comment).
 
+  ## Where a held token gets attached
+
+  The 1:1 `<message>` is the case that fails loudly, but it is not the only
+  consumer. WhatsApp Web attaches the same token to three stanzas, and the shape
+  differs between them:
+
+    * `<message>` — a `<tctoken>` child with **empty attrs** (`valid_token/2`).
+    * `w:profile:picture` query — a `<tctoken t="...">` nested **inside** the
+      `<picture>` node (`token_children/2`). Without it, another user's picture
+      comes back empty and indistinguishable from "no picture".
+    * `<presence type=subscribe>` — a top-level `<tctoken t="...">`
+      (`token_children/2`).
+
   ## Expiry / reissue windows
 
   Tokens live in 7-day buckets; a token is expired once its bucket falls
@@ -64,18 +77,65 @@ defmodule Amarula.Protocol.Signal.TcTokenStore do
   @num_buckets 4
 
   @doc """
-  The (unexpired) token bytes we hold for `jid`, or `nil` if we have none, it
-  expired, or storage errors — any of which just means "don't attach", not a
-  hard failure.
+  The (unexpired) token bytes we hold for `jid` **with the timestamp they were
+  issued at**, as `{token, timestamp}` — or `nil` if we have none, it expired,
+  or storage errors (any of which just means "don't attach", not a hard
+  failure).
+
+  The timestamp matters because two of the three places a token goes on the
+  wire carry it as the node's `t` attr — see `valid_token/2` for the third.
   """
-  @spec valid_token(Conn.t(), String.t()) :: binary() | nil
-  def valid_token(conn, jid) do
+  @spec valid_entry(Conn.t(), String.t()) :: {binary(), integer()} | nil
+  def valid_entry(conn, jid) do
     case read(conn, storage_jid(conn, jid)) do
       %{token: token, timestamp: ts} when is_binary(token) and byte_size(token) > 0 ->
-        if expired?(ts), do: nil, else: token
+        if expired?(ts), do: nil, else: {token, ts}
 
       _ ->
         nil
+    end
+  end
+
+  @doc """
+  The (unexpired) token bytes we hold for `jid`, without its timestamp, or `nil`.
+
+  This is what the **message** path wants: Baileys attaches the token to an
+  outgoing `<message>` as a bare `<tctoken>` with *empty* attrs
+  (`messages-send.ts`), unlike the profile-picture and presence-subscribe paths,
+  which go through `buildTcTokenFromJid` and carry `t`. Keeping the two accessors
+  distinct is what stops the `t` attr from leaking onto the message stanza.
+  """
+  @spec valid_token(Conn.t(), String.t()) :: binary() | nil
+  def valid_token(conn, jid) do
+    case valid_entry(conn, jid) do
+      {token, _ts} -> token
+      nil -> nil
+    end
+  end
+
+  @doc """
+  The `<tctoken t="...">bytes</tctoken>` child list to attach for `jid`, or `[]`
+  when we hold nothing usable. Port of Baileys' `buildTcTokenFromJid`
+  (`Utils/tc-token-utils.ts`), used by the profile-picture query and
+  `presence subscribe`.
+
+  Returns `[]` for anything that isn't a user jid — a group or newsletter has no
+  tctoken, and Baileys gates both call sites the same way. Callers with an extra
+  rule of their own (the picture query must also skip our *own* account, which
+  the server otherwise never answers) apply it before calling.
+
+  Unlike Baileys we do not clear the stored record when it turns out to be
+  expired; this stays a pure read. See the deferred note in `docs/PARITY.md`.
+  """
+  @spec token_children(Conn.t(), String.t()) :: [Node.t()]
+  def token_children(conn, jid) do
+    if JID.jid_user?(jid) do
+      case valid_entry(conn, jid) do
+        {token, ts} -> [Node.create("tctoken", %{"t" => Integer.to_string(ts)}, token)]
+        nil -> []
+      end
+    else
+      []
     end
   end
 
@@ -150,6 +210,48 @@ defmodule Amarula.Protocol.Signal.TcTokenStore do
     store_tokens(conn, node, fallback_jid)
     :ok
   end
+
+  @doc """
+  Persist the tokens a history-sync blob carried — ported from Baileys'
+  `storeTcTokensFromHistorySync` (`Utils/process-message.ts`). Each entry is
+  `%{jid, token, timestamp, sender_timestamp}` as decoded by
+  `Amarula.Protocol.Messages.HistorySync`; `sender_timestamp` may be `nil`.
+
+  This is the bulk source of tokens. Without it a freshly linked device starts
+  with an empty store and has to earn a token per contact the slow way — one
+  rejected send (ack `463`) and one issuance IQ each — even though the phone
+  just handed us every token it holds.
+
+  Skips an entry whose stored timestamp is already **greater than or equal to**
+  the incoming one. Note the `>=`: `store_token/3` uses a strict `>` because a
+  same-second reissue there is genuinely newer, whereas a history blob only ever
+  replays what we may already hold. Best-effort — a storage failure on one entry
+  never aborts the rest, since this runs on the history-sync path, not a send.
+  """
+  @spec store_history_sync(Conn.t(), [map()]) :: :ok
+  def store_history_sync(conn, entries) when is_list(entries) do
+    Enum.each(entries, &store_history_entry(conn, &1))
+  end
+
+  defp store_history_entry(conn, %{jid: jid, token: token, timestamp: ts} = entry)
+       when is_binary(jid) and is_binary(token) and is_integer(ts) do
+    key = storage_jid(conn, jid)
+    existing = read(conn, key)
+
+    unless is_map(existing) and Map.get(existing, :timestamp, 0) >= ts do
+      fields = %{token: token, timestamp: ts}
+
+      fields =
+        case Map.get(entry, :sender_timestamp) do
+          sender_ts when is_integer(sender_ts) -> Map.put(fields, :sender_timestamp, sender_ts)
+          _ -> fields
+        end
+
+      write(conn, key, Map.merge(existing || %{}, fields))
+    end
+  end
+
+  defp store_history_entry(_conn, _entry), do: :ok
 
   defp store_tokens(_conn, nil, _fallback_jid), do: :ok
 

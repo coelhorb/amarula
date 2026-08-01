@@ -159,8 +159,25 @@ defmodule Amarula.Protocol.PresenceTest do
   test "subscribe/2" do
     assert %Node{
              tag: "presence",
-             attrs: %{"to" => "999@s.whatsapp.net", "type" => "subscribe", "id" => "TAG1"}
+             attrs: %{"to" => "999@s.whatsapp.net", "type" => "subscribe", "id" => "TAG1"},
+             content: nil
            } =
              Presence.subscribe("999@s.whatsapp.net", "TAG1")
+  end
+
+  describe "subscribe/3 with a trusted-contact token" do
+    # Unlike the profile-picture query (where rc14 nests it inside <picture>),
+    # the subscribe token sits at the top level of the stanza.
+    test "puts the tctoken at the top level, not nested" do
+      tctoken = Node.create("tctoken", %{"t" => "1770000000"}, <<4, 1, 33>>)
+
+      assert %Node{tag: "presence", content: [^tctoken]} =
+               Presence.subscribe("999@s.whatsapp.net", "TAG1", [tctoken])
+    end
+
+    test "an empty token list leaves the stanza childless" do
+      assert Presence.subscribe("999@s.whatsapp.net", "TAG1", []) ==
+               Presence.subscribe("999@s.whatsapp.net", "TAG1")
+    end
   end
 end

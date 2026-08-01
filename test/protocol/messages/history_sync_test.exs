@@ -238,6 +238,97 @@ defmodule Amarula.Protocol.Messages.HistorySyncTest do
     end
   end
 
+  describe "tc_tokens" do
+    test "extracts a conversation's trusted-contact token with both timestamps" do
+      sync = %Proto.HistorySync{
+        syncType: :INITIAL_BOOTSTRAP,
+        conversations: [
+          %Proto.Conversation{
+            id: "5511999999999@s.whatsapp.net",
+            tcToken: <<4, 1, 33>>,
+            tcTokenTimestamp: 1_770_000_000,
+            tcTokenSenderTimestamp: 1_769_000_000
+          }
+        ]
+      }
+
+      assert {:ok, result} = fetch(sync)
+
+      assert result.tc_tokens == [
+               %{
+                 jid: "5511999999999@s.whatsapp.net",
+                 token: <<4, 1, 33>>,
+                 timestamp: 1_770_000_000,
+                 sender_timestamp: 1_769_000_000
+               }
+             ]
+    end
+
+    test "a token with no sender timestamp still comes through" do
+      sync = %Proto.HistorySync{
+        syncType: :RECENT,
+        conversations: [
+          %Proto.Conversation{
+            id: "5511999999999@s.whatsapp.net",
+            tcToken: <<9>>,
+            tcTokenTimestamp: 1_770_000_000
+          }
+        ]
+      }
+
+      assert {:ok, result} = fetch(sync)
+      assert [%{token: <<9>>, sender_timestamp: nil}] = result.tc_tokens
+    end
+
+    # The expiry window is computed from the timestamp, so a token without one
+    # would read as immediately expired — drop it at the boundary instead.
+    test "drops a token with no (or zero) timestamp" do
+      sync = %Proto.HistorySync{
+        syncType: :RECENT,
+        conversations: [
+          %Proto.Conversation{id: "5511999999999@s.whatsapp.net", tcToken: <<9>>},
+          %Proto.Conversation{
+            id: "5511888888888@s.whatsapp.net",
+            tcToken: <<9>>,
+            tcTokenTimestamp: 0
+          }
+        ]
+      }
+
+      assert {:ok, result} = fetch(sync)
+      assert result.tc_tokens == []
+    end
+
+    test "the jid is normalized to account level, matching the storage key" do
+      sync = %Proto.HistorySync{
+        syncType: :RECENT,
+        conversations: [
+          %Proto.Conversation{
+            id: "5511999999999:29@s.whatsapp.net",
+            tcToken: <<9>>,
+            tcTokenTimestamp: 1_770_000_000
+          }
+        ]
+      }
+
+      assert {:ok, result} = fetch(sync)
+      assert [%{jid: "5511999999999@s.whatsapp.net"}] = result.tc_tokens
+    end
+
+    test "conversations carrying no token contribute nothing" do
+      sync = %Proto.HistorySync{
+        syncType: :RECENT,
+        conversations: [
+          %Proto.Conversation{id: "5511999999999@s.whatsapp.net"},
+          %Proto.Conversation{id: "120363000000000000@g.us"}
+        ]
+      }
+
+      assert {:ok, result} = fetch(sync)
+      assert result.tc_tokens == []
+    end
+  end
+
   describe "lid_mappings" do
     test "extracts the explicit phoneNumberToLidMappings list" do
       sync = %Proto.HistorySync{

@@ -13,11 +13,11 @@ This document tracks our current Baileys review watermark and serves as a runboo
 
 | Field | Value |
 | --- | --- |
-| Baileys version | `7.0.0-rc13` |
-| Commit | `8053b086ecc97ec3f78299561de11959bab05d39` |
-| Date | 2026-05-21 |
+| Baileys version | `7.0.0-rc14` |
+| Commit | `7e7b0757e3f9f3c7789fb1cfd2f241d5002a199a` |
+| Date | 2026-07-29 |
 
-*(To re-verify: dereference `refs/tags/v7.0.0-rc13` on the real Baileys repo to get the commit the tag resolves to, rather than the tag object's own SHA.)*
+*(To re-verify: dereference `refs/tags/v7.0.0-rc14` on the real Baileys repo to get the commit the tag resolves to, rather than the tag object's own SHA.)*
 
 ## Two Versions to Track
 
@@ -35,7 +35,7 @@ Run these checks from the Baileys checkout (one level up from `amarula/`).
 ```bash
 # Fetch the latest upstream and see what landed since our pinned commit.
 git fetch origin
-PINNED=8053b086ecc97ec3f78299561de11959bab05d39   # the commit pinned above
+PINNED=7e7b0757e3f9f3c7789fb1cfd2f241d5002a199a   # the commit pinned above
 
 # Commits we haven't reviewed yet:
 git log --oneline $PINNED..origin/master
@@ -135,3 +135,66 @@ resilience — skip undecryptable records instead of aborting", built on #2350):
   remaining patches are picked up on the next resync.
 - Both kinds are surfaced via a `mismatches` return element (logged by
   `Connection.apply_app_state_reply/2`), never silently swallowed.
+
+## Upstream review — 2026-08-01 (rc13→rc14)
+
+The rc13→rc14 diff itself is four commits, but reviewing #2607 exposed that our
+tctoken port covered only the **message** path. Baileys attaches the same token
+in four places; the other three (profile picture, `presence subscribe`, and the
+history-sync ingestion that populates the store in the first place) all predate
+the rc13 watermark — they arrived in #2339 and were simply never carried over.
+They are ported here alongside the rc14 delta.
+
+**Ported:**
+
+- **#2607** profile-picture tctoken, adopted **directly in its fixed form**: the
+  `<tctoken t="...">` nests *inside* the `<picture>` node rather than sitting
+  beside it (a sibling makes the server ignore it, so the picture returns empty
+  and is indistinguishable from "no picture"). `Profile.Ops.picture_url_query/3`
+  + `Amarula.Profile.picture_url/3`. Since we never shipped the sibling shape,
+  there is no migration — only the gap closes.
+- **tctoken on `<presence type=subscribe>`** (#2339) — top-level, *not* nested;
+  `Protocol.Presence.subscribe/3` + the `:presence_subscribe` handler.
+- **tctoken ingestion from history sync** (#2339, `storeTcTokensFromHistorySync`)
+  — `HistorySync` now decodes `tcToken` / `tcTokenTimestamp` /
+  `tcTokenSenderTimestamp` into a `:tc_tokens` result key, and `Connection`
+  persists them via `TcTokenStore.store_history_sync/2`. This is the one with
+  real behavioural weight: without it a freshly linked device starts with an
+  empty store and has to earn a token per contact off rejected (`463`) sends,
+  even though the phone just handed us every token it holds.
+- **WA protocol version** — bumped to the *live* revision rather than Baileys'
+  bundled `2.3000.1043857760`, since the bundled default is itself allowed to
+  lag and stale pairing fails silently.
+- **Android "experimental" warning** (the `Socket/socket.ts` hunk of #2201).
+
+**Reviewed, NOT affected (no action needed):**
+
+- **#2201** Android browser — already ported in `ccabc9b`, ahead of it landing
+  upstream: platform `:ANDROID`, `webInfo` omitted, `DeviceProps.platformType`
+  `:ANDROID_PHONE`. Only the warning above was missing.
+- **The message `<tctoken>` keeps empty attrs.** rc14's `t` attr lands in
+  `buildTcTokenFromJid`, which serves only the picture and presence paths;
+  `messages-send.ts` still builds its own with `attrs: {}`. Adding `t` there
+  would be a divergence, not a fix — `send_flow_test.exs` now asserts it stays
+  empty. This is why `TcTokenStore` exposes both `valid_token/2` (bare) and
+  `valid_entry/2`/`token_children/2` (timestamped).
+- **rc14's "timestamp-less token is unusable" hardening** — already implied:
+  `store_token/3` has always required a parseable `t` to write at all, so such
+  an entry never reaches the store.
+- **#2586** `import type Long` — TypeScript-only.
+
+**Deferred (not ported):**
+
+- **The `__index` sentinel + 24 h expired-token prune**
+  (`messages-recv.ts:2050-2161`). Baileys needs the index because its prune walks
+  an in-memory set; our store is one file-backed key per contact, so there is no
+  memory pressure — only dead entries accumulating on disk. Worth doing if a
+  long-lived profile's `tctoken` directory ever grows enough to matter.
+- **Clear-on-expired-read.** `buildTcTokenFromJid` deletes the stored record when
+  it finds it expired (preserving `senderTimestamp`); our `valid_entry/2` is a
+  pure read and leaves it. Same observable send behaviour, one less write on the
+  hot path.
+- **tctoken re-issuance after a peer's identity change**
+  (`messages-recv.ts:727`). `maybe_refresh_identity/3` wipes the stale sessions
+  and refetches the bundle, but does not re-issue the privacy token, so the first
+  send after a peer relinks can still cost one `463` round-trip.

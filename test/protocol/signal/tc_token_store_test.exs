@@ -53,6 +53,110 @@ defmodule Amarula.Protocol.Signal.TcTokenStoreTest do
     assert TcTokenStore.valid_token(conn, @pn) == "fresh"
   end
 
+  describe "valid_entry/2" do
+    test "returns the token together with its issue timestamp", %{conn: conn} do
+      ts = now() - @bucket
+      put_token(conn, %{token: "fresh", timestamp: ts})
+
+      assert TcTokenStore.valid_entry(conn, @pn) == {"fresh", ts}
+    end
+
+    test "applies the same expiry window as valid_token/2", %{conn: conn} do
+      put_token(conn, %{token: "stale", timestamp: now() - 4 * @bucket})
+
+      assert TcTokenStore.valid_entry(conn, @pn) == nil
+    end
+  end
+
+  describe "token_children/2" do
+    test "builds a <tctoken> carrying the timestamp as the `t` attr", %{conn: conn} do
+      ts = now()
+      put_token(conn, %{token: "fresh", timestamp: ts})
+
+      assert [node] = TcTokenStore.token_children(conn, @pn)
+      assert node.tag == "tctoken"
+      assert node.attrs == %{"t" => Integer.to_string(ts)}
+      assert node.content == "fresh"
+    end
+
+    test "is empty when we hold nothing usable", %{conn: conn} do
+      assert TcTokenStore.token_children(conn, @pn) == []
+
+      put_token(conn, %{token: "stale", timestamp: now() - 4 * @bucket})
+      assert TcTokenStore.token_children(conn, @pn) == []
+    end
+
+    # Groups and newsletters have no trusted-contact token; Baileys gates both
+    # call sites on the jid being a user before it even looks in the store.
+    test "is empty for a group jid even with a token on file", %{conn: conn} do
+      put_token(conn, %{token: "fresh", timestamp: now()})
+
+      assert TcTokenStore.token_children(conn, "12345-67890@g.us") == []
+    end
+  end
+
+  describe "store_history_sync/2" do
+    test "persists a token the blob carried, keyed by the mapped LID", %{conn: conn} do
+      ts = now()
+
+      :ok =
+        TcTokenStore.store_history_sync(conn, [
+          %{jid: @pn, token: "from-history", timestamp: ts, sender_timestamp: nil}
+        ])
+
+      assert TcTokenStore.valid_entry(conn, @pn) == {"from-history", ts}
+    end
+
+    test "carries sender_timestamp through, so the reissue dedupe survives", %{conn: conn} do
+      :ok =
+        TcTokenStore.store_history_sync(conn, [
+          %{jid: @pn, token: "t", timestamp: now(), sender_timestamp: now()}
+        ])
+
+      refute TcTokenStore.should_issue_new?(conn, @pn)
+    end
+
+    test "never downgrades a token we already hold at the same or newer timestamp",
+         %{conn: conn} do
+      ts = now()
+      put_token(conn, %{token: "current", timestamp: ts})
+
+      :ok =
+        TcTokenStore.store_history_sync(conn, [
+          %{jid: @pn, token: "older", timestamp: ts - @bucket, sender_timestamp: nil},
+          # Equal timestamps are skipped too — a blob only ever replays what we
+          # may already hold, so `>=` here where store_token/3 uses a strict `>`.
+          %{jid: @pn, token: "same-second", timestamp: ts, sender_timestamp: nil}
+        ])
+
+      assert TcTokenStore.valid_entry(conn, @pn) == {"current", ts}
+    end
+
+    test "a strictly newer token from the blob does replace ours", %{conn: conn} do
+      put_token(conn, %{token: "current", timestamp: now() - @bucket})
+      newer = now()
+
+      :ok =
+        TcTokenStore.store_history_sync(conn, [
+          %{jid: @pn, token: "newer", timestamp: newer, sender_timestamp: nil}
+        ])
+
+      assert TcTokenStore.valid_entry(conn, @pn) == {"newer", newer}
+    end
+
+    test "skips malformed entries without touching the rest", %{conn: conn} do
+      ts = now()
+
+      :ok =
+        TcTokenStore.store_history_sync(conn, [
+          %{jid: @pn, token: nil, timestamp: ts, sender_timestamp: nil},
+          %{jid: @pn, token: "good", timestamp: ts, sender_timestamp: nil}
+        ])
+
+      assert TcTokenStore.valid_entry(conn, @pn) == {"good", ts}
+    end
+  end
+
   describe "should_issue_new?/2" do
     test "true when we have never issued for this contact", %{conn: conn} do
       assert TcTokenStore.should_issue_new?(conn, @pn)

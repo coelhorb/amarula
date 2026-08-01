@@ -903,10 +903,13 @@ defmodule Amarula.Connection do
 
   @impl GenServer
   def handle_call({:presence_subscribe, jid}, _from, state) do
+    to_jid = Amarula.Address.to_jid!(jid)
+
     node =
       Presence.subscribe(
-        Amarula.Address.to_jid!(jid),
-        generate_message_tag(state)
+        to_jid,
+        generate_message_tag(state),
+        TcTokenStore.token_children(conn(state), to_jid)
       )
 
     send_reply(state, node)
@@ -1072,12 +1075,14 @@ defmodule Amarula.Connection do
     # concern and stay direct.
     messages = Map.get(result, :messages, [])
     lid_mappings = Map.get(result, :lid_mappings, [])
+    tc_tokens = Map.get(result, :tc_tokens, [])
 
     Logger.debug(
       "history sync (#{inspect(result.sync_type)}): #{length(result.chats)} chats, " <>
         "#{length(result.contacts)} contacts, " <>
         "#{length(messages)} messages, " <>
-        "#{length(lid_mappings)} lid mappings"
+        "#{length(lid_mappings)} lid mappings, " <>
+        "#{length(tc_tokens)} tctokens"
     )
 
     if result.chats != [], do: emit_to_subscribers(state, :chats_update, result.chats)
@@ -1085,6 +1090,10 @@ defmodule Amarula.Connection do
     emit_to_subscribers(state, :history_sync, result)
 
     state = learn_lid_mappings(state, lid_mappings)
+    # After learn_lid_mappings/2 on purpose: the tokens are keyed by LID, and the
+    # pairs this same blob carries are what let storage_jid/2 resolve a PN chat to
+    # the LID key a later send will look under.
+    TcTokenStore.store_history_sync(conn(state), tc_tokens)
     {:noreply, learn_own_push_name(state, Map.get(result, :push_names, []))}
   end
 
