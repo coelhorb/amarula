@@ -164,7 +164,7 @@ defmodule Amarula.MixProject do
       {:jason, "~> 1.4"},
 
       # Protocol buffers
-      {:protobuf, "~> 0.15.0"},
+      {:protobuf, "~> 0.17"},
 
       # HTTP client
       {:req, "~> 0.4"},
