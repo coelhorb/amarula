@@ -79,7 +79,11 @@ defmodule Amarula.Protocol.Messages.Relay do
     enc_attrs = Keyword.get(opts, :enc_attrs, %{})
 
     participants_node =
-      Node.create("participants", %{}, Enum.map(participants, &participant_to_node(&1, enc_attrs)))
+      Node.create(
+        "participants",
+        %{},
+        Enum.map(participants, &participant_to_node(&1, enc_attrs))
+      )
 
     children = [participants_node] ++ maybe_device_identity(any_pkmsg?(participants), account)
 

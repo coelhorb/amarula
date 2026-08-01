@@ -2149,7 +2149,13 @@ defmodule Amarula.Connection do
             type -> %{"mediatype" => type}
           end
 
-        payload = %{msg_id: msg_id, message: message, stanza_attrs: stanza_attrs, enc_attrs: enc_attrs}
+        payload = %{
+          msg_id: msg_id,
+          message: message,
+          stanza_attrs: stanza_attrs,
+          enc_attrs: enc_attrs
+        }
+
         deliver_async(state, recipient, payload, nil)
 
       nil ->

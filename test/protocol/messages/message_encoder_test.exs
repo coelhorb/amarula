@@ -471,6 +471,7 @@ defmodule Amarula.Protocol.Messages.MessageEncoderTest do
       # reach documentMessage.fileName (it used to be silently dropped)
       assert MessageEncoder.media(:document, @info, file_name: "invoice.pdf").documentMessage.fileName ==
                "invoice.pdf"
+
       assert MessageEncoder.media(:sticker, @info).stickerMessage.url == "https://x/y"
     end
 
