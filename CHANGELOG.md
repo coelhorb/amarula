@@ -10,7 +10,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.5.6] - 2026-08-01
 
 > **Media sends were broken in every release up to 0.5.5** — if you send media,
-> upgrade. Text sending was unaffected.
+> upgrade. Text sending was unaffected. This release also closes a HIGH-severity
+> advisory in a dependency that parses untrusted network input (see **Security**).
+
+### Security
+
+- **`protobuf` raised to `~> 0.17`, closing GHSA-rv48-qqj5-crxg / CVE-2026-54451
+  (HIGH)** ([#68]). Every `~> 0.15.0` version placed no recursion limit on
+  embedded-message decoding, so a small deeply-nested payload could exhaust
+  memory. That is directly reachable here: Amarula decodes protobuf from bytes
+  decrypted from **any peer able to open a Signal session with you**, so this was
+  a remote denial-of-service vector, not a theoretical one. 0.16.1 caps nesting at
+  100 levels. No Amarula code changed — only the generated `decode/1` API is used,
+  and the existing generated module compiles unchanged under 0.17.
+- **Dependency lock refreshed alongside it** ([#68]), clearing every remaining
+  advisory — `mint` (two HIGH, including the HTTP/2 CONTINUATION flood), `hpax`
+  (HIGH) and `plug`. `mix hex.audit` now reports nothing on a fresh resolve; it
+  reported 14 advisories before.
 
 ### Fixed
 
@@ -74,6 +90,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#59]: https://github.com/tubedude/amarula/issues/59
 [#61]: https://github.com/tubedude/amarula/pull/61
 [#62]: https://github.com/tubedude/amarula/issues/62
+[#68]: https://github.com/tubedude/amarula/pull/68
 
 ## [0.5.5] - 2026-07-30
 
