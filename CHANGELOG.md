@@ -23,10 +23,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a remote denial-of-service vector, not a theoretical one. 0.16.1 caps nesting at
   100 levels. No Amarula code changed — only the generated `decode/1` API is used,
   and the existing generated module compiles unchanged under 0.17.
-- **Dependency lock refreshed alongside it** ([#68]), clearing every remaining
-  advisory — `mint` (two HIGH, including the HTTP/2 CONTINUATION flood), `hpax`
-  (HIGH) and `plug`. `mix hex.audit` now reports nothing on a fresh resolve; it
-  reported 14 advisories before.
+- **Dependency lock refreshed alongside it** ([#68]) — `mint` (two HIGH, including
+  the HTTP/2 CONTINUATION flood), `hpax` (HIGH) and `plug`, taking `mix hex.audit`
+  in this repo from 14 advisories to none.
+
+  To be precise about what that buys you: **only the `protobuf` floor above is
+  enforced downstream.** `mix.lock` ships with the repo, not the package, so your
+  build resolves this project's constraints against your own tree. `mint` and
+  `hpax` arrive transitively via `req` and are not constrained here, and `plug` is
+  test-only. If you carry an older `req`, re-resolve and run `mix hex.audit`
+  yourself.
 
 ### Changed
 
