@@ -99,6 +99,30 @@ defmodule Amarula.ConnectionTest do
       # Clean up
       GenServer.stop(pid)
     end
+
+    test "an Android :browser warns at startup; the default browser is silent" do
+      import ExUnit.CaptureLog
+
+      start = fn browser ->
+        root = Path.join(System.tmp_dir!(), "amarula_warn_#{System.unique_integer([:positive])}")
+        on_exit(fn -> File.rm_rf(root) end)
+
+        conn =
+          Amarula.new(%{
+            profile: :"warn_#{System.unique_integer([:positive])}",
+            storage: {Amarula.Storage.File, root: root},
+            browser: browser
+          })
+
+        capture_log(fn ->
+          {:ok, pid} = Connection.start_link(conn)
+          GenServer.stop(pid)
+        end)
+      end
+
+      assert start.(["MyApp", "Android", ""]) =~ "Android browser mode is experimental"
+      refute start.(["Mac OS", "Chrome", "14.4.1"]) =~ "Android browser mode"
+    end
   end
 
   describe "one connection per profile (profile registry)" do

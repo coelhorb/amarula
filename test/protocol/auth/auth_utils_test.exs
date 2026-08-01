@@ -148,5 +148,18 @@ defmodule Amarula.Protocol.Auth.AuthUtilsTest do
       lower = %{@config | browser: ["x", "android", ""]}
       assert AuthUtils.create_user_agent(lower).platform == :ANDROID
     end
+
+    # Public so Connection can warn on it without a second copy of the rule.
+    test "android?/1 matches the 2nd element only, case-insensitively" do
+      assert AuthUtils.android?(["MyApp", "Android", ""])
+      assert AuthUtils.android?(["x", "android", ""])
+      assert AuthUtils.android?(["x", "MyAndroidApp", ""])
+      refute AuthUtils.android?(["Mac OS", "Chrome", "14.4.1"])
+      # 1st/3rd elements must not trigger it
+      refute AuthUtils.android?(["Android", "Chrome", ""])
+      refute AuthUtils.android?(["x", "Chrome", "android"])
+      refute AuthUtils.android?(nil)
+      refute AuthUtils.android?([])
+    end
   end
 end
