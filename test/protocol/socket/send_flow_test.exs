@@ -28,11 +28,12 @@ defmodule Amarula.Protocol.Socket.SendFlowTest do
 
   @moduletag :capture_log
 
-  alias Amarula.Protocol.Binary.{Node, NodeUtils}
+  alias Amarula.Protocol.Binary.{JID, Node, NodeUtils}
   alias Amarula.Protocol.Crypto.Crypto
   alias Amarula.Protocol.Messages.ConversationSender
   alias Amarula.Protocol.Proto
   alias Amarula.Protocol.Signal.{LidMappingFileStore, SessionStore}
+  alias Amarula.Storage
   alias Amarula.Protocol.Socket.ConnectionSupervisor
   alias Amarula.Connection
 
@@ -268,6 +269,7 @@ defmodule Amarula.Protocol.Socket.SendFlowTest do
     attrs = %{"class" => "message", "id" => msg_id}
     attrs = if code = opts[:error], do: Map.put(attrs, "error", code), else: attrs
     attrs = if ph = opts[:phash], do: Map.put(attrs, "phash", ph), else: attrs
+    attrs = if from = opts[:from], do: Map.put(attrs, "from", from), else: attrs
     inject(ctx, Node.create("ack", attrs, nil))
   end
 
@@ -276,7 +278,25 @@ defmodule Amarula.Protocol.Socket.SendFlowTest do
   defp relay_text(ctx) do
     usync = recv_frame()
     inject(ctx, usync_devices_reply(attr(usync, "id")))
-    drain_until_message(ctx)
+    message = drain_until_message(ctx)
+    drain_tctoken_issuance()
+    message
+  end
+
+  # A first-ever 1:1 send fires a fire-and-forget tctoken issuance IQ
+  # (xmlns="privacy") shortly after the message frame — irrelevant to these
+  # send-path flows. Drain it (if/when it shows up) so it doesn't land as the
+  # next unrelated `recv_frame`/`refute_receive`. Best-effort: a timeout here
+  # just means it hasn't landed yet (or was already deduped away).
+  defp drain_tctoken_issuance do
+    receive do
+      {:frame_out, %{tag: "iq"} = iq} ->
+        unless attr(iq, "xmlns") == "privacy" do
+          flunk("unexpected frame while draining tctoken issuance: #{inspect(iq)}")
+        end
+    after
+      200 -> :ok
+    end
   end
 
   defp recv_frame do
@@ -318,13 +338,22 @@ defmodule Amarula.Protocol.Socket.SendFlowTest do
         message
 
       %{tag: "iq"} = iq ->
-        requested =
-          iq
-          |> NodeUtils.get_binary_node_child("key")
-          |> Map.get(:content)
-          |> Enum.map(&NodeUtils.get_attr(&1, "jid"))
+        case attr(iq, "xmlns") do
+          "privacy" ->
+            # The fire-and-forget tctoken issuance IQ — irrelevant here, no
+            # reply expected/awaited by the sender. Just drop it.
+            :ok
 
-        inject(ctx, bundle_reply(attr(iq, "id"), requested))
+          _encrypt ->
+            requested =
+              iq
+              |> NodeUtils.get_binary_node_child("key")
+              |> Map.get(:content)
+              |> Enum.map(&NodeUtils.get_attr(&1, "jid"))
+
+            inject(ctx, bundle_reply(attr(iq, "id"), requested))
+        end
+
         drain_until_message(ctx)
     end
   end
@@ -605,6 +634,11 @@ defmodule Amarula.Protocol.Socket.SendFlowTest do
           |> Enum.map(&NodeUtils.get_attr(&1, "jid"))
 
         inject(ctx, bundle_reply(attr(iq, "id"), requested))
+
+      "privacy" ->
+        # Fire-and-forget tctoken issuance for one of the other concurrent
+        # recipients' sends — irrelevant here, no reply expected. Drop it.
+        :ok
     end
   end
 
@@ -669,6 +703,7 @@ defmodule Amarula.Protocol.Socket.SendFlowTest do
     bundle1 = recv_frame()
     inject(ctx, bundle_reply(attr(bundle1, "id")))
     _first_msg = recv_frame()
+    drain_tctoken_issuance()
 
     # Second send: USync still runs, but the session now exists so no bundle IQ.
     send_text(ctx, @jid, "second")
@@ -775,6 +810,32 @@ defmodule Amarula.Protocol.Socket.SendFlowTest do
     assert NodeUtils.get_attr(to_node, "jid") == @device0_jid
   end
 
+  test "attaches a LID-keyed trusted-contact token to a PN send", ctx do
+    lid = "20000000001@lid"
+    token = "trusted-contact-token"
+
+    LidMappingFileStore.store_mappings(ctx.conn, [{lid, @jid}])
+
+    :ok =
+      Storage.put(ctx.conn.storage, :test, :tctoken, lid, %{
+        token: token,
+        timestamp: System.system_time(:second)
+      })
+
+    task = send_text(ctx, @jid, "with trusted-contact token")
+    usync_iq = recv_frame()
+    inject(ctx, usync_devices_reply(attr(usync_iq, "id"), lid))
+
+    bundle_iq = recv_frame()
+    inject(ctx, bundle_reply(attr(bundle_iq, "id")))
+    message = recv_frame()
+
+    assert %Node{content: ^token} = NodeUtils.get_binary_node_child(message, "tctoken")
+
+    ack(ctx, message.attrs["id"])
+    assert {:ok, _msg_id} = await_send_result(task)
+  end
+
   test "force-refreshes sessions for a newly mapped LID (reason=identity)", ctx do
     lid = "20000000001@lid"
 
@@ -867,6 +928,7 @@ defmodule Amarula.Protocol.Socket.SendFlowTest do
     assert NodeUtils.get_attr(usync_iq, "xmlns") == "usync"
     inject(ctx, usync_reply_with_own(attr(usync_iq, "id"), 1))
     _first = drain_until_message(ctx)
+    drain_tctoken_issuance()
 
     # Second send: devices are cached → no USync; sessions exist → no bundle
     # fetch. First (and only) frame is the message itself.
@@ -994,6 +1056,33 @@ defmodule Amarula.Protocol.Socket.SendFlowTest do
     assert_receive {[:amarula, :send, :ack], ^ref, %{count: 1}, meta}
     assert meta.outcome == :rejected
     assert meta.code == "479"
+  end
+
+  test "a 463 ack issues a fresh tctoken and never resends the message", ctx do
+    task = send_text_async(ctx, @jid, "recipient hasn't trusted us yet")
+    message = relay_text(ctx)
+    msg_id = message.attrs["id"]
+
+    # 463 = MessageAccountRestriction: the recipient hasn't trusted us, so the
+    # message above was NOT delivered. Recovery is to earn a token for a FUTURE
+    # send — never to resend this one (Baileys handleBadAck: a resend counts as
+    # another "reach out" and worsens the restriction).
+    ack(ctx, msg_id, error: "463", from: @jid)
+
+    assert {:error, {:send_rejected, "463"}} = await_send_result(task)
+
+    assert_receive {:frame_out, %{tag: "iq"} = iq}, 1_000
+    assert attr(iq, "xmlns") == "privacy"
+
+    token =
+      iq
+      |> NodeUtils.get_binary_node_child("tokens")
+      |> NodeUtils.get_binary_node_child("token")
+
+    assert NodeUtils.get_attr(token, "type") == "trusted_contact"
+    assert NodeUtils.get_attr(token, "jid") == JID.jid_normalized_user(@jid)
+
+    refute_receive {:frame_out, %{tag: "message"}}, 200
   end
 
   test "a phash ack (no error attr) is success, never a resend", ctx do

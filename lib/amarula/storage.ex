@@ -29,6 +29,8 @@ defmodule Amarula.Storage do
     * `:sender_key`  — group `SenderKeyRecord`, keyed by sender-key-name string.
     * `:lid_mapping` — LID↔PN user mapping, keyed by the user string.
     * `:device_list` — cached device list, keyed by user string.
+    * `:tctoken`     — trusted-contact privacy tokens (see `TcTokenStore`), keyed
+      by the storage jid (LID-resolved user string).
 
   The retry cache is deliberately *not* here — it is ephemeral, bounded state
   with different needs (eviction, low latency), handled by the separate
@@ -59,6 +61,7 @@ defmodule Amarula.Storage do
           | :device_list
           | :app_state_sync_key
           | :app_state_version
+          | :tctoken
 
   @typedoc "A key within a namespace. `:creds` uses `:self`; the rest use strings."
   @type key :: :self | String.t()
