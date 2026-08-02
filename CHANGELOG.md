@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Rapid first sends to the same contact no longer fire a duplicate
+  `issuePrivacyTokens` for each one** ([#81]). The post-send issuance path was
+  guarded only by `should_issue_new?/2`, which reads a `sender_timestamp` written
+  *after* the IQ round-trips — so anything sent inside that window saw a stale
+  "no token yet" and issued again. Issuance now goes through `Connection`, on the
+  same in-flight plumbing as the 463 path. The two are keyed separately by source,
+  matching Baileys: a 463 means the recipient rejected us and still warrants
+  recovery even while a routine post-send issuance is in flight, so a single
+  shared key would dedupe a 463 against the very send that caused it.
+
+- **`usage-rules.md` no longer teaches the deprecated 2-tuple message ref**
+  ([#81]). It still documented `{jid, msg_id}` instead of
+  `{jid, msg_id, from_me}`. That file ships inside the hex package as agent
+  guidance, so consumers syncing it via `mix usage_rules.sync` were being taught
+  a form the API rejects. It now also covers the per-type `send_media` options
+  (including that the proto-cased spellings are refused), `send_call_timeout_ms`,
+  `req_options`, and the three connect-time sync flags.
+
 ## [0.5.6] - 2026-08-01
 
 > **Media sends were broken in every release up to 0.5.5** — if you send media,
@@ -146,6 +166,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#70]: https://github.com/tubedude/amarula/pull/70
 [#71]: https://github.com/tubedude/amarula/pull/71
 [#72]: https://github.com/tubedude/amarula/pull/72
+[#81]: https://github.com/tubedude/amarula/pull/81
 
 ## [0.5.5] - 2026-07-30
 
