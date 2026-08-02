@@ -5,14 +5,46 @@ on:
     branches:
       - main
   pull_request:
+  # The audit job needs a trigger that doesn't depend on us pushing: an advisory
+  # is published on someone else's schedule. GHSA-rv48-qqj5-crxg sat in a shipped
+  # release for ~2 weeks because nothing re-checked between pushes.
+  schedule:
+    - cron: "17 6 * * *"
 
 permissions:
   contents: read
 
 jobs:
+  audit:
+    name: Security advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.20"
+          otp-version: "29"
+
+      - run: mix deps.get
+
+      # Fails the build on a retired package or a security advisory in the
+      # resolved tree (`hex.audit` exits 1). Deliberately blocking: a HIGH in the
+      # library that parses untrusted network input should stop a release, not
+      # sit in a report nobody reads.
+      #
+      # NOTE this audits THIS repo's mix.lock. Consumers resolve our mix.exs
+      # constraints against their own tree, so a fix here only reaches them if the
+      # floor in mix.exs is raised too — see the 0.5.6 CHANGELOG.
+      - name: mix hex.audit
+        run: mix hex.audit
+
   test:
     name: Test (Elixir ${{ matrix.elixir }} / OTP ${{ matrix.otp }})
     runs-on: ubuntu-latest
+    # The daily trigger exists for the audit job only — no need to re-run the
+    # full matrix against unchanged code.
+    if: github.event_name != 'schedule'
     strategy:
       fail-fast: false
       # Cover the full declared support range (mix.exs: elixir ~> 1.18) across
