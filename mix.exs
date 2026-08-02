@@ -185,12 +185,37 @@ defmodule Amarula.MixProject do
 
   # Run "mix help deps" to learn about dependencies.
   #
-  # Constraint style: this is a LIBRARY, so its requirements compose with every
-  # consumer's. Prefer the loosest bound that is still safe — `~> 0.5`, not
-  # `~> 0.5.1`. A trailing patch digit pins the MINOR (`~> 0.15.0` means
-  # `< 0.16.0`), which is how the protobuf CVE reached consumers: the fix shipped
-  # in 0.16.1 and our own requirement blocked it by one digit. See the 0.5.6
-  # CHANGELOG. `mix.lock` still pins exact versions for our CI; it is not shipped.
+  # Constraint style, and the one trade-off worth understanding before editing.
+  #
+  # DEFAULT for 0.x deps: stay inside the minor — `~> 0.5.1`, meaning
+  # `>= 0.5.1 and < 0.6.0`. Patch releases float in; a 0.6 does not. By Elixir
+  # convention a 0.x MINOR bump is upstream's breaking/feature channel, and this
+  # is a LIBRARY: our requirements compose with the consumer's, so a wide bound
+  # lets them resolve onto a version we have never compiled against.
+  #
+  # The cost is the protobuf CVE in miniature: that fix shipped in 0.16.1 while
+  # our `~> 0.15.0` capped at `< 0.16.0`, blocking consumers by one digit (see
+  # the 0.5.6 CHANGELOG). A tight bound WILL eventually sit in front of a fix,
+  # because 0.x projects ship fixes in minor bumps.
+  #
+  # What makes that acceptable is that a bound is no longer allowed to go stale
+  # quietly: `.github/workflows/deps-freshness.yml` runs
+  # `scripts/check_dep_headroom.exs` weekly and FAILS when a newer version
+  # exists that one of these bounds forbids. Widening is then a reviewed commit
+  # that ran the suite first, rather than something a consumer discovers for us.
+  # If that job is ever removed, revisit this policy with it — they are a pair.
+  #
+  # DELIBERATE EXCEPTION — `protobuf` is `~> 0.17`, not `~> 0.17.0`. It decodes
+  # bytes from any peer that can open a Signal session with us, so it is the
+  # dependency where a security fix most needs to reach consumers without
+  # waiting on us to cut a release. Here the CVE lesson outranks the
+  # untested-minor risk, and the floor is what matters: `~> 0.17` guarantees
+  # consumers are above CVE-2026-54451. Do not tighten it to `~> 0.17.0`.
+  #
+  # `req` is `~> 0.4` and predates this policy; it is wide for no articulated
+  # reason. Narrow it to the current minor when someone has time to test that.
+  #
+  # `mix.lock` still pins exact versions for our CI; it is not shipped.
   defp deps do
     [
       # Telemetry events (operators attach handlers / a metrics reporter)
@@ -200,7 +225,7 @@ defmodule Amarula.MixProject do
       {:nimble_options, "~> 1.0"},
 
       # WebSocket client
-      {:websockex, "~> 0.5"},
+      {:websockex, "~> 0.5.1"},
 
       # JSON handling
       {:jason, "~> 1.4"},
@@ -218,10 +243,10 @@ defmodule Amarula.MixProject do
       {:base64url, "~> 1.0"},
 
       # Binary manipulation
-      {:binary, ">= 0.0.5 and < 1.0.0"},
+      {:binary, "~> 0.0.5"},
 
       # QR code generation
-      {:qr_code, "~> 3.2"},
+      {:qr_code, "~> 3.2.0"},
 
       # Cryptographic operations (using built-in :crypto for most operations)
 

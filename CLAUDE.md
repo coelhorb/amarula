@@ -42,6 +42,9 @@ mix hex.audit
 
 ```bash
 mix deps.update --all && mix test && mix hex.audit
+
+# Is anything newer published that our own mix.exs bounds forbid?
+mix run scripts/check_dep_headroom.exs
 ```
 
 Our `mix.lock` is only for this repo — consumers resolve `mix.exs` constraints
@@ -50,6 +53,14 @@ Two things to know when a bump breaks something: a `0.x` **minor** bump can be
 breaking by Elixir convention (`req` 0.6 → 0.7 landed mid-0.5.6), and a fix only
 reaches consumers if the **floor in `mix.exs`** allows it — `~> 0.15.0` means
 `< 0.16.0`, which is how the protobuf CVE stayed reachable.
+
+Both commands run weekly in CI (`.github/workflows/deps-freshness.yml`), so you
+should rarely be the one to discover a problem here. They answer different
+questions and neither substitutes for the other: `deps.update --all` resolves
+**within** our bounds, so it can never see the version a too-tight bound is
+hiding — that is what the headroom check is for. See the constraint-style
+comment above `deps/0` in `mix.exs` for the policy and its one deliberate
+exception (`protobuf`).
 
 ### Running Examples
 ```bash

@@ -1,0 +1,88 @@
+name: Dependency freshness
+
+# Two questions, weekly, that regular CI structurally cannot answer:
+#
+#   1. Does the newest tree our bounds ALLOW still build and pass?  Our mix.lock
+#      pins exact versions, so a push-triggered run proves nothing about what a
+#      consumer resolving fresh would land on.
+#   2. Is there anything newer our bounds FORBID?  We pin 0.x deps inside their
+#      minor (`~> 0.5.1`), which is safe against untested breakage but will sit
+#      in front of a fix published as a minor bump — precisely how the protobuf
+#      CVE reached consumers (fix in 0.16.1, our cap `< 0.16.0`).
+#
+# (2) is what makes the tight pin defensible: the bound stays narrow, but it is
+# not allowed to go stale quietly. A failure here is a prompt to review and
+# widen deliberately, not a sign that main is broken.
+#
+# Kept out of elixir.yml on purpose — the per-push signal should be a statement
+# about our code, not about what Hex published this week.
+
+on:
+  schedule:
+    # Weekly, Monday morning. Advisories are time-critical and audited daily in
+    # elixir.yml; version drift is not, and a daily run would mostly re-prove
+    # the same resolution.
+    - cron: "23 7 * * 1"
+  # On demand too: "do the bounds still hold?" is worth asking deliberately
+  # before cutting a release.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  resolve-latest:
+    name: Newest allowed tree
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Single pair, not the full matrix: this job varies the DEPENDENCIES, not
+      # the Elixir/OTP version. Cross-version coverage is elixir.yml's job.
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.20"
+          otp-version: "29"
+
+      # No cache, deliberately — a deps/ or _build/ restored from a key built on
+      # the committed mix.lock is exactly the stale resolution this job exists
+      # to bypass.
+      - name: Update every dependency to the newest allowed
+        run: mix deps.update --all
+
+      # When this job fails the first question is "what moved?", and the log
+      # should answer it without a local repro. The no-change case has to say so
+      # out loud: an empty diff and a diff that never ran look identical.
+      - name: Show what moved
+        run: |
+          if git diff --quiet mix.lock; then
+            echo "mix.lock unchanged — every dependency is already at the newest version our bounds allow."
+          else
+            git --no-pager diff --stat mix.lock
+            git --no-pager diff mix.lock
+          fi
+
+      - name: Compile (warnings as errors)
+        run: mix compile --warnings-as-errors
+
+      - name: Run tests
+        run: mix test
+
+      # Advisories in the newest-allowed tree. Distinct from elixir.yml's daily
+      # audit, which checks the committed lock: this one can catch an advisory a
+      # consumer could resolve into but our own lock happens to avoid.
+      - name: mix hex.audit
+        run: mix hex.audit
+
+      # Question (2). Runs last and always, even if the steps above failed —
+      # "protobuf 0.18 exists and we forbid it" is worth knowing on exactly the
+      # week something else went red, and it is cheap.
+      #
+      # --no-compile: the compile step above already built this tree.
+      - name: Headroom — anything newer that our bounds forbid?
+        if: always()
+        run: mix run --no-compile --no-start scripts/check_dep_headroom.exs
+
+      # Nothing is pushed from here. The updated mix.lock is a probe, not a
+      # deliverable — refreshing it is a reviewed commit (see CLAUDE.md), and the
+      # checkout is discarded with the runner.
