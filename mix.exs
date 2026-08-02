@@ -184,6 +184,13 @@ defmodule Amarula.MixProject do
   end
 
   # Run "mix help deps" to learn about dependencies.
+  #
+  # Constraint style: this is a LIBRARY, so its requirements compose with every
+  # consumer's. Prefer the loosest bound that is still safe — `~> 0.5`, not
+  # `~> 0.5.1`. A trailing patch digit pins the MINOR (`~> 0.15.0` means
+  # `< 0.16.0`), which is how the protobuf CVE reached consumers: the fix shipped
+  # in 0.16.1 and our own requirement blocked it by one digit. See the 0.5.6
+  # CHANGELOG. `mix.lock` still pins exact versions for our CI; it is not shipped.
   defp deps do
     [
       # Telemetry events (operators attach handlers / a metrics reporter)
@@ -193,7 +200,7 @@ defmodule Amarula.MixProject do
       {:nimble_options, "~> 1.0"},
 
       # WebSocket client
-      {:websockex, "~> 0.5.1"},
+      {:websockex, "~> 0.5"},
 
       # JSON handling
       {:jason, "~> 1.4"},
@@ -211,10 +218,10 @@ defmodule Amarula.MixProject do
       {:base64url, "~> 1.0"},
 
       # Binary manipulation
-      {:binary, "~> 0.0.5"},
+      {:binary, ">= 0.0.5 and < 1.0.0"},
 
       # QR code generation
-      {:qr_code, "~> 3.2.0"},
+      {:qr_code, "~> 3.2"},
 
       # Cryptographic operations (using built-in :crypto for most operations)
 
