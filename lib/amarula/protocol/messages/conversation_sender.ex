@@ -750,10 +750,10 @@ defmodule Amarula.Protocol.Messages.ConversationSender do
   defp maybe_issue_tctoken(ctx) do
     if one_to_one?(ctx) and not protocol_message?(ctx.message) and
          TcTokenStore.should_issue_new?(ctx.conn, ctx.target_jid) do
-      cm = ctx.cm
-      conn = ctx.conn
-      jid = ctx.target_jid
-      Connection.run_background(cm, fn -> Connection.issue_tctoken(cm, conn, jid) end)
+      # Goes through Connection so it shares the in-flight guard with the 463
+      # recovery path — `should_issue_new?/2` alone can't dedupe a burst, since
+      # `sender_timestamp` is only written once the IQ round-trips.
+      Connection.issue_tctoken_async(ctx.cm, ctx.target_jid)
     end
 
     :ok
