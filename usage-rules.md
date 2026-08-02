@@ -64,6 +64,18 @@ pairing (the code/QR shows but the phone reports "Couldn't link device"). If tha
 happens, override the pinned default without upgrading Amarula by setting the
 `AMARULA_WA_VERSION` env var to a dotted triple (e.g. `2.3000.1042537629`).
 
+App-global config (`config :amarula, ...`), for cases the per-connection map doesn't
+cover:
+
+    config :amarula,
+      send_call_timeout_ms: :timer.minutes(30),          # deadline for every send/fetch
+      req_options: [receive_timeout: :timer.minutes(30)] # raise BOTH for large media
+
+Per-connection opt-outs for short-lived connections, all default `true`:
+`sync_history:` (process pushed history syncs), `sync_app_state:` (resync
+chats/contacts), `fire_init_queries:` (post-login IQs). Turning them off skips the
+work, not the acks — the phone still sees the device as linked.
+
 Lifecycle:
 - `disconnect/1` — close the websocket; keep the tree up (pair with `reconnect/1`).
 - `stop/1` — take the whole tree down and free the profile slot (accepts a pid or a profile name).
@@ -121,6 +133,9 @@ recipients complete independently.
 ```elixir
 Amarula.send_text(conn, jid, "hello")
 Amarula.send_media(conn, jid, :image, File.read!("pic.jpg"), caption: "hi")   # raw bytes, not a path/base64; :image|:video|:audio|:document|:sticker
+# per-type opts: :file_name/:page_count/:jpeg_thumbnail (document), :gif_playback (video),
+# :is_animated (sticker), :width/:height, :seconds (REQUIRED for :audio), :ptt, :view_once, :ptv.
+# All snake_case — the proto-cased spellings (:fileName) are rejected.
 Amarula.send_reaction(conn, msg, "👍")   # "" removes the reaction
 Amarula.send_edit(conn, msg, "fixed typo")
 Amarula.send_revoke(conn, msg)           # delete for everyone
@@ -132,8 +147,10 @@ Amarula.send_contact(conn, jid, display_name, vcard)
 ```
 
 Reactions/edits/deletes — and `fetch_history/4` — point at a message via a
-**`message_ref`**: pass either the **`%Amarula.Msg{}` you received** as-is, or a
-**`{jid, msg_id}` tuple**. (`mark_read/4` is different — it takes a list of plain
+**`message_ref`**: pass either the **`%Amarula.Msg{}` you received** as-is, a
+received `content.key`, or a **`{jid, msg_id, from_me}` tuple** (`from_me` = did
+*you* send the target). The bare `{jid, msg_id}` 2-tuple still works but is
+deprecated — it can't say whose message it is, so it guesses. (`mark_read/4` is different — it takes a list of plain
 message-id strings, not a `message_ref`.)
 
 Presence/typing: `set_presence/2` (`:available`/`:unavailable`),

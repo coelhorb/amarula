@@ -199,7 +199,7 @@ defmodule Amarula.Connection do
           # In-flight 463 tctoken recoveries (async_nolink), monitor ref → jid.
           # Guards against concurrent 463s for one contact each spawning an
           # issuance IQ (Baileys' `inFlight463Recoveries`).
-          tctoken_recoveries: %{reference() => String.t()},
+          tctoken_recoveries: %{reference() => {:send | :recover, String.t()}},
           # Media re-upload requests awaiting the phone's mediaretry notification,
           # keyed by msg id. Each holds the consumer's `from`, the media_key needed
           # to decrypt the reply, and the timeout timer.
@@ -401,6 +401,13 @@ defmodule Amarula.Connection do
   def run_background(pid, fun) when is_function(fun, 0) do
     GenServer.cast(pid, {:run_background, fun})
   end
+
+  # Ask Connection to issue a trusted-contact token for `jid`, deduped against
+  # any issuance already in flight for that contact. Internal: the send path
+  # calls this after a 1:1 send.
+  @doc false
+  @spec issue_tctoken_async(GenServer.server(), String.t()) :: :ok
+  def issue_tctoken_async(pid, jid), do: GenServer.cast(pid, {:issue_tctoken, jid})
 
   # Fire an `issuePrivacyTokens` IQ for `jid` and store whatever trusted-contact
   # token(s) come back (`TcTokenStore`), so a *future* 1:1 send to `jid` has one
@@ -984,6 +991,11 @@ defmodule Amarula.Connection do
   def handle_cast({:run_background, fun}, state) do
     Task.Supervisor.start_child(state.task_supervisor, fun)
     {:noreply, state}
+  end
+
+  @impl GenServer
+  def handle_cast({:issue_tctoken, jid}, state) do
+    {:noreply, spawn_tctoken_issuance(state, :send, jid)}
   end
 
   @impl GenServer
@@ -2039,32 +2051,35 @@ defmodule Amarula.Connection do
   # best-effort issuance so a FUTURE send to them may succeed; never retry the
   # message itself (Baileys' handleBadAck: retrying counts as another "reach
   # out" and worsens the restriction). See `TcTokenStore` moduledoc.
-  defp maybe_recover_tctoken(state, node, "463") do
-    jid = NodeUtils.get_attr(node, "from")
+  defp maybe_recover_tctoken(state, node, "463"),
+    do: spawn_tctoken_issuance(state, :recover, NodeUtils.get_attr(node, "from"))
 
-    cond do
-      not is_binary(jid) ->
-        state
+  defp maybe_recover_tctoken(state, _node, _code), do: state
 
-      # Already recovering this contact — a burst of rejected sends yields a burst
-      # of 463s, and one issuance answers them all (Baileys' inFlight463Recoveries).
-      jid in Map.values(state.tctoken_recoveries) ->
-        state
+  # Start one issuance for `jid`, unless one is already in flight for that
+  # contact FROM THE SAME TRIGGER. Both funnel through here, but keyed by source:
+  # Baileys tracks the two windows separately (`inFlightTcTokenIssuance` for the
+  # post-send path, `inFlight463Recoveries` for the rejection path), because a 463
+  # says the recipient rejected us and still warrants recovery even if a routine
+  # post-send issuance happens to be in flight. Within one source, a burst
+  # collapses to a single `issuePrivacyTokens` IQ. Cleared when the task ends or dies.
+  defp spawn_tctoken_issuance(state, source, jid) when is_binary(jid) do
+    if {source, jid} in Map.values(state.tctoken_recoveries) do
+      state
+    else
+      pid = self()
+      conn = state.conn
 
-      true ->
-        pid = self()
-        conn = state.conn
+      task =
+        Task.Supervisor.async_nolink(state.task_supervisor, fn ->
+          issue_tctoken(pid, conn, jid)
+        end)
 
-        task =
-          Task.Supervisor.async_nolink(state.task_supervisor, fn ->
-            issue_tctoken(pid, conn, jid)
-          end)
-
-        put_in(state.tctoken_recoveries[task.ref], jid)
+      put_in(state.tctoken_recoveries[task.ref], {source, jid})
     end
   end
 
-  defp maybe_recover_tctoken(state, _node, _code), do: state
+  defp spawn_tctoken_issuance(state, _source, _jid), do: state
 
   # Telemetry for the outcome of a tracked send AFTER relay — the send span
   # closes at relay time, so the server's verdict needs its own event. Gated on

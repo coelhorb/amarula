@@ -109,7 +109,13 @@ defmodule Amarula.Protocol.Socket.ReceiveFlowTest do
         )
       )
 
-    {:ok, pid: pid, conn: Amarula.Conn.new(config), supervisor: sup, config: config}
+    ctx = %{pid: pid, conn: Amarula.Conn.new(config), supervisor: sup, config: config}
+
+    # These tests exercise the receive path; the tctoken issuance a 1:1 send fires
+    # is noise here. Suppress it so no stray `privacy` IQ lands mid-assertion.
+    suppress_tctoken_issuance(ctx)
+
+    {:ok, Map.to_list(ctx)}
   end
 
   # --- shared wire helpers (send_flow_test style) ---
@@ -136,18 +142,15 @@ defmodule Amarula.Protocol.Socket.ReceiveFlowTest do
 
   # A first-ever 1:1 send fires a fire-and-forget tctoken issuance IQ
   # (xmlns="privacy") shortly after the message frame — irrelevant to these
-  # receive-path flows. Drain it (if/when it shows up) so it doesn't land as
-  # the next unrelated `recv_frame`/`refute_receive`. Best-effort: a timeout
-  # here just means it hasn't landed yet (or was already deduped away).
-  defp drain_tctoken_issuance do
-    receive do
-      {:frame_out, %{tag: "iq"} = iq} ->
-        unless attr(iq, "xmlns") == "privacy" do
-          flunk("unexpected frame while draining tctoken issuance: #{inspect(iq)}")
-        end
-    after
-      200 -> :ok
-    end
+  # receive-path flows, and racing it with a timed drain is how a suite acquires
+  # a slow-CI flake. Suppress it instead: `should_issue_new?/2` skips issuance
+  # when we already issued in the current bucket, so seeding `sender_timestamp`
+  # means no IQ is ever emitted and there is nothing to drain.
+  defp suppress_tctoken_issuance(ctx) do
+    :ok =
+      Amarula.Storage.put(ctx.conn.storage, ctx.config.profile, :tctoken, @jid, %{
+        sender_timestamp: System.system_time(:second)
+      })
   end
 
   defp with_id(%Node{attrs: attrs} = node, id), do: %{node | attrs: Map.put(attrs, "id", id)}
@@ -258,7 +261,6 @@ defmodule Amarula.Protocol.Socket.ReceiveFlowTest do
     msg_id = message.attrs["id"]
     inject(ctx, Node.create("ack", %{"class" => "message", "id" => msg_id}, nil))
     assert {:ok, ^msg_id} = Task.await(task, 2000)
-    drain_tctoken_issuance()
     msg_id
   end
 
@@ -691,7 +693,6 @@ defmodule Amarula.Protocol.Socket.ReceiveFlowTest do
       assert cached.tag == "message"
       inject(ctx, Node.create("ack", %{"class" => "message", "id" => cached.attrs["id"]}, nil))
       assert {:ok, _} = Task.await(task, 2000)
-      drain_tctoken_issuance()
 
       # A devices notification for the recipient invalidates their cached list.
       node =
