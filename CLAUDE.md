@@ -33,7 +33,23 @@ mix dialyzer
 
 # Linting (Credo)
 mix credo
+
+# Security advisories in the resolved tree (CI runs this daily and on every push)
+mix hex.audit
 ```
+
+**Every so often, refresh dependencies:**
+
+```bash
+mix deps.update --all && mix test && mix hex.audit
+```
+
+Our `mix.lock` is only for this repo — consumers resolve `mix.exs` constraints
+against their own tree — so a stale lock hides breakage rather than causing it.
+Two things to know when a bump breaks something: a `0.x` **minor** bump can be
+breaking by Elixir convention (`req` 0.6 → 0.7 landed mid-0.5.6), and a fix only
+reaches consumers if the **floor in `mix.exs`** allows it — `~> 0.15.0` means
+`< 0.16.0`, which is how the protobuf CVE stayed reachable.
 
 ### Running Examples
 ```bash
