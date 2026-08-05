@@ -177,15 +177,25 @@ defmodule Amarula do
   > act on **your own** messages; `false` elsewhere). A wrong `from_me` makes an
   > edit/revoke silently match nothing (the payload is E2E-encrypted, so the server
   > can't reject it). Pass the explicit `{jid, msg_id, from_me}` form instead.
+  >
+  > It is **no longer part of this type**, so `mix dialyzer` reports it at every call
+  > site — deliberately, because the runtime `IO.warn` only fires on a path you
+  > actually execute, and a stderr line is easy to lose in a running app while the
+  > failure itself is silent. It still works at runtime (with that warning) and will
+  > be **removed in 0.6.0**.
 
   (Quote *replies* use the `:quoted` opt on `send_text`, which takes the
   `%Amarula.Msg{}` directly.)
   """
+  # The deprecated `{jid(), String.t()}` 2-tuple is deliberately absent: it is still
+  # accepted at runtime (with an `IO.warn`) but excluded from the type so Dialyzer
+  # flags consumer call sites at BUILD time. `Amarula.Msg.ref/0` already excluded it;
+  # this type saying otherwise was the reason a consumer could carry the old shape
+  # into production with no signal but a stderr line. Removed outright in 0.6.0.
   @type message_ref ::
           Amarula.Msg.t()
           | {jid(), String.t(), boolean()}
           | {jid(), String.t(), boolean(), jid()}
-          | {jid(), String.t()}
 
   @typedoc "Result of a send: the assigned message id, or an error."
   @type send_result :: {:ok, msg_id :: String.t()} | {:error, term()}

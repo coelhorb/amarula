@@ -13,6 +13,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   check against the live revision (see `docs/PARITY.md`); the previous pin
   (`1044303277`, from 0.5.6) had fallen behind.
 
+### Deprecated
+
+- **The bare `{jid, msg_id}` message ref is now reported by Dialyzer** ([#46],
+  [#47]). It has warned at runtime since 0.5.4, but `t:Amarula.message_ref/0`
+  still listed it — so every public `@spec` declared it valid and a consumer got
+  no build-time signal at all. The type now omits it, matching
+  `t:Amarula.Msg.ref/0`, which never listed it.
+
+  Nothing breaks: it still works at runtime with the same `IO.warn`. But the only
+  previous signal was that warning, which fires solely on a path you execute and
+  is easy to lose in a running app — while the failure it guards is silent, since
+  a wrong `from_me` makes an edit or revoke match nothing and the payload is
+  E2E-encrypted, so the server cannot reject it.
+
+  **It is removed in 0.6.0.** Pass `{jid, msg_id, from_me}`, or the received
+  `%Amarula.Msg{}` / `content.key`, which carry `from_me` for you. Also fixed a
+  leftover in `usage-rules.md` still teaching the 2-tuple for `fetch_history/4`
+  ([#81] cleaned up the others).
+
 ### Fixed
 
 - **Windows desktop pairing advertised the retired `WIN32` web sub-platform;

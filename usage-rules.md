@@ -150,7 +150,10 @@ Reactions/edits/deletes — and `fetch_history/4` — point at a message via a
 **`message_ref`**: pass either the **`%Amarula.Msg{}` you received** as-is, a
 received `content.key`, or a **`{jid, msg_id, from_me}` tuple** (`from_me` = did
 *you* send the target). The bare `{jid, msg_id}` 2-tuple still works but is
-deprecated — it can't say whose message it is, so it guesses. (`mark_read/4` is different — it takes a list of plain
+deprecated — it can't say whose message it is, so it guesses, and a wrong guess makes
+an edit/revoke silently match nothing. It is out of the published type (so
+`mix dialyzer` flags it) and is **removed in 0.6.0** — always pass `from_me`.
+(`mark_read/4` is different — it takes a list of plain
 message-id strings, not a `message_ref`.)
 
 Presence/typing: `set_presence/2` (`:available`/`:unavailable`),
@@ -217,7 +220,7 @@ if msg.from_me and msg.from.device == own_device, do: :ignore
 `:history_sync` events deliver WhatsApp's own history (chats/contacts/messages) **as
 events to store** — not a queryable archive Amarula maintains. Request older history on
 demand with `Amarula.fetch_history(conn, oldest, oldest_ts, count)` — where `oldest`
-is a `message_ref` (a `%Amarula.Msg{}` or `{jid, msg_id}`, same as sends take); it arrives
+is a `message_ref` (a `%Amarula.Msg{}` or `{jid, msg_id, from_me}`, same as sends take); it arrives
 **asynchronously** via a later `:history_sync` event.
 
 ## Groups
