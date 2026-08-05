@@ -13,9 +13,9 @@ This document tracks our current Baileys review watermark and serves as a runboo
 
 | Field | Value |
 | --- | --- |
-| Baileys version | `7.0.0-rc14` |
-| Commit | `7e7b0757e3f9f3c7789fb1cfd2f241d5002a199a` |
-| Date | 2026-07-29 |
+| Baileys version | `7.0.0-rc14` (master, unreleased) |
+| Commit | `0af2386292907f7d9742d8d41f830d8c48208fa1` |
+| Date | 2026-08-05 |
 
 *(To re-verify: dereference `refs/tags/v7.0.0-rc14` on the real Baileys repo to get the commit the tag resolves to, rather than the tag object's own SHA.)*
 
@@ -198,3 +198,65 @@ They are ported here alongside the rc14 delta.
   (`messages-recv.ts:727`). `maybe_refresh_identity/3` wipes the stale sessions
   and refetches the bundle, but does not re-issue the privacy token, so the first
   send after a peer relinks can still cost one `463` round-trip.
+
+## Upstream review — 2026-08-05 (rc14→master, 2 commits)
+
+Routine watermark bump. Only two commits landed on Baileys `master` since the
+rc14 pin, one of them protocol-relevant; also swept open issues/PRs on both
+Baileys and whatsmeow for anything unmerged but worth tracking.
+
+**Ported:**
+
+- **#2741** `WIN32` → `WIN_HYBRID` web sub-platform — see CHANGELOG. Confirmed
+  via `git diff` against `src/Utils/validate-connection.ts` that this is the
+  full extent of the merged fix (a superset, PR #2693 covering Mac OS +
+  `syncFullHistory` platform selection too, is still open/unmerged — watching,
+  not porting speculative upstream work).
+- **WA protocol version** bumped `1044303277` → `1044539926` (routine drift
+  check, `mix run scripts/update_wa_version.exs`).
+- **Pairing-code path no longer resolves before the server confirms**
+  (Amarula-original fix — not ported, neither reference has one yet; see
+  below for how the bug was found). `start_link_code_pairing/3` now sends the
+  `companion_hello` IQ as a *tracked* IQ (`:pairing_code_hello`, the existing
+  bootstrap-continuation mechanism `send_tracked_iq` already uses for
+  login/prekey/digest) instead of fire-and-forget. The `{:ok, code}` reply and
+  `:pairing_code` event still fire immediately — the code needs to reach the
+  user right away and the common case is acceptance — but a server rejection
+  now surfaces asynchronously as the existing `:pairing_failure` event instead
+  of being silently dropped. No `IQ`/`pending_iqs` module change needed:
+  pairing is low-frequency (once per pairing attempt), so it doesn't need the
+  blocking-waiter machinery hot sends use — reusing the tracked-IQ path
+  already built for one-off bootstrap steps was simpler than extending `IQ`
+  to carry both a reply-to-caller and a state side-effect through one
+  resolution. See `handle_tracked_iq(:pairing_code_hello, ...)` and the new
+  regression test in `link_code_pairing_test.exs`.
+
+**Reviewed, NOT affected (no action needed):**
+
+- The other master commit (`74af8eee`) only touches `Example/example.ts` —
+  no source impact.
+
+**Watching (open upstream, not yet fixed anywhere — do not port speculatively):**
+
+- **[Baileys #2737](https://github.com/WhiskeySockets/Baileys/issues/2737) —
+  potentially critical.** As of ~2026-07-28, WhatsApp began sending a
+  `<notification type="companion_reg_refresh">` to the companion client
+  immediately after a successful QR scan. Neither Baileys nor whatsmeow
+  (independently reproduced, `go.mau.fi/whatsmeow@e9a033b`) implement it; both
+  ack-and-discard it, `pair-success` never arrives, and the phone reports
+  "Couldn't link device — try connection again." Amarula has no handler for
+  `companion_reg_refresh` either (`Router`/`dispatch_notification` in
+  `connection.ex`), so it is presumptively exposed to the same failure — **new
+  QR-based device pairing may currently be broken industry-wide**, not just
+  for us. No open PR resolves the root cause yet (only server-side; no client
+  workaround identified). Re-check this issue before assuming a live pairing
+  failure is Amarula-specific. The #2737 thread also flagged a secondary,
+  independent bug in Baileys' `requestPairingCode()` (resolves before the
+  server responds) — Amarula had the same shape; see the Ported entry above
+  for our fix.
+- **PR #2693** (open, unmerged) — broader desktop-platform fix superseding
+  #2741: also maps `Mac OS` + `Desktop` + `syncFullHistory` to
+  `UserAgent.Platform.MACOS` (currently always `WEB` unless Android).
+  Speculative/unreviewed by Baileys maintainers; Amarula's
+  `create_user_agent/1` has the same always-`WEB`-unless-Android gap. Revisit
+  once merged.

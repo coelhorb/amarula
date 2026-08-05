@@ -3315,7 +3315,6 @@ defmodule Amarula.Connection do
       attrs: [
         {"to", Constants.s_whatsapp_net()},
         {"type", "set"},
-        {"id", generate_message_tag(state)},
         {"xmlns", "md"}
       ],
       content: [
@@ -3341,7 +3340,11 @@ defmodule Amarula.Connection do
     }
 
     Logger.info("Requested link-code pairing for #{phone} — code #{code}")
-    state = send_binary_node(state, iq)
+    # The code is shown/returned immediately (the user needs it to act on right
+    # away); the companion_hello IQ is tracked so a server-side rejection (e.g.
+    # 400 bad-request) still surfaces as :pairing_failure instead of silently
+    # leaving the consumer with a code that was never registered.
+    state = send_tracked_iq(state, iq, :pairing_code_hello)
     emit_to_subscribers(state, :pairing_code, %{code: code})
   end
 
@@ -4765,6 +4768,16 @@ defmodule Amarula.Connection do
   defp handle_tracked_iq(:clean_dirty, {:ok, _node}, state) do
     Logger.debug("Dirty bits cleared")
     state
+  end
+
+  defp handle_tracked_iq(:pairing_code_hello, {:ok, _node}, state) do
+    Logger.debug("Link-code companion_hello accepted")
+    state
+  end
+
+  defp handle_tracked_iq(:pairing_code_hello, {:error, reason}, state) do
+    Logger.error("Link-code companion_hello rejected: #{inspect(reason)}")
+    emit_to_subscribers(state, :pairing_failure, %{reason: "link_code_rejected"})
   end
 
   defp handle_tracked_iq(:clean_dirty, {:error, reason}, state) do

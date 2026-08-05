@@ -120,6 +120,22 @@ defmodule Amarula.Protocol.Socket.LinkCodePairingTest do
       assert {:error, :custom_pairing_code_must_be_8_chars} =
                Connection.request_pairing_code(pid, "15551234567", custom_code: "SHORT")
     end
+
+    test "a server-rejected companion_hello surfaces :pairing_failure", %{pid: pid} do
+      assert {:ok, _code} = Connection.request_pairing_code(pid, "15551234567")
+      assert_receive {:amarula, :pairing_code, _}
+      hello = recv_frame()
+
+      error =
+        Node.create("iq", %{"id" => attr(hello, "id"), "type" => "error"}, [
+          Node.create("error", %{"code" => "400", "text" => "bad-request"}, nil)
+        ])
+
+      send(pid, {:inject_node, error})
+
+      assert_receive {:amarula, :pairing_failure, %{reason: "link_code_rejected"}}
+      assert Process.alive?(pid)
+    end
   end
 
   describe "link_code_companion_reg notification (finish)" do

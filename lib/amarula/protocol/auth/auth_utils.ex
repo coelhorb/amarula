@@ -275,7 +275,7 @@ defmodule Amarula.Protocol.Auth.AuthUtils do
   defp platform_to_web_sub_platform(platform) do
     case platform do
       "Mac OS" -> :DARWIN
-      "Windows" -> :WIN32
+      "Windows" -> :WIN_HYBRID
       _ -> :WEB_BROWSER
     end
   end

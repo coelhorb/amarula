@@ -7,7 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Pinned WhatsApp Web version bumped to `2.3000.1044539926`.** Routine drift
+  check against the live revision (see `docs/PARITY.md`); the previous pin
+  (`1044303277`, from 0.5.6) had fallen behind.
+
 ### Fixed
+
+- **Windows desktop pairing advertised the retired `WIN32` web sub-platform;
+  now advertises `WIN_HYBRID`.** Ported from upstream Baileys
+  [#2741](https://github.com/WhiskeySockets/Baileys/pull/2741) (merged
+  2026-08-04): as of ~2026-06-30 the WhatsApp server rejects the handshake
+  with a 428 before any QR is emitted when `webInfo.webSubPlatform = WIN32`
+  and `browser[0] = "Windows"` with `sync_full_history: true`. `WIN32` was the
+  legacy Electron WhatsApp Desktop identity; the modern native Desktop
+  advertises `WIN_HYBRID`, already present in the proto but never selected.
+  `platform_to_web_sub_platform/1` in `auth_utils.ex` now matches.
+
+- **A rejected phone-number pairing code is no longer silently treated as
+  valid.** `request_pairing_code/3` fired the `companion_hello` IQ and
+  returned/emitted the code without waiting on the server's reply, so a
+  rejection (e.g. `400 bad-request`) still handed the caller a code that was
+  never registered. The IQ is now tracked; a rejection surfaces as the
+  existing `:pairing_failure` event. The code itself still returns/emits
+  immediately on the (common) accepted path. Found while reviewing
+  [Baileys#2737](https://github.com/WhiskeySockets/Baileys/issues/2737), which
+  flagged the identical bug upstream — not yet fixed there either, so this is
+  an Amarula-original fix, not a port.
 
 - **Rapid first sends to the same contact no longer fire a duplicate
   `issuePrivacyTokens` for each one** ([#81]). The post-send issuance path was
