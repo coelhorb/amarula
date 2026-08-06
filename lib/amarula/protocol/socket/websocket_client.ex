@@ -33,8 +33,13 @@ defmodule Amarula.Protocol.Socket.WebSocketClient do
     * `:parent_pid` - Required. PID of the Connection that will receive events.
     * `:url` - WebSocket URL (defaults to WhatsApp WebSocket URL)
     * `:headers` - List or map of HTTP headers
+    * `:origin` - `Origin` header for the handshake (defaults to WhatsApp Web's origin)
+    * `:agent` - `User-Agent` header for the handshake (defaults to `"Mozilla/5.0"`)
     * Other options for timeouts and configuration
 
+  `:origin`/`:agent` are sent as real `Origin`/`User-Agent` headers unless
+  `:headers` already sets one of those keys (case-insensitively), in which
+  case the explicit `:headers` entry wins.
   """
   def start_link(opts \\ []) do
     Logger.debug("Starting WebSocket client connection to WhatsApp server")
@@ -62,6 +67,13 @@ defmodule Amarula.Protocol.Socket.WebSocketClient do
         _ -> []
       end
 
+    # `origin`/`agent` were being computed (and logged) but never actually
+    # added to the request — the handshake went out with no Origin/User-Agent
+    # header at all unless the caller duplicated them into `:headers`
+    # manually. An explicit `:headers` entry still wins over these (matched
+    # case-insensitively, since HTTP header names are).
+    headers_list = with_origin_and_agent(headers_list, origin, agent)
+
     # Build initial state struct
     state = %__MODULE__{
       url: url,
@@ -81,6 +93,21 @@ defmodule Amarula.Protocol.Socket.WebSocketClient do
     Logger.debug("User agent: #{agent}")
 
     WebSockex.start_link(url, __MODULE__, state, websocket_opts)
+  end
+
+  @doc """
+  Adds `Origin`/`User-Agent` headers to `headers_list`, unless it already has
+  one of those keys (matched case-insensitively), in which case the explicit
+  entry wins. Public so this can be unit-tested without a live connection.
+  """
+  @spec with_origin_and_agent([{String.t(), String.t()}], String.t(), String.t()) ::
+          [{String.t(), String.t()}]
+  def with_origin_and_agent(headers_list, origin, agent) do
+    existing_keys = MapSet.new(headers_list, fn {key, _value} -> String.downcase(key) end)
+
+    [{"Origin", origin}, {"User-Agent", agent}]
+    |> Enum.reject(fn {key, _value} -> MapSet.member?(existing_keys, String.downcase(key)) end)
+    |> Kernel.++(headers_list)
   end
 
   @doc """
