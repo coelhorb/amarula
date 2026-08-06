@@ -102,6 +102,35 @@ defmodule Amarula.Protocol.Auth.AuthUtilsTest do
       ua = AuthUtils.create_user_agent(%{@config | country_code: nil})
       assert ua.localeCountryIso31661Alpha2 == "US"
     end
+
+    test "defaults mcc/mnc/os_version/os_build_number/device when unset" do
+      ua = AuthUtils.create_user_agent(@config)
+
+      assert ua.mcc == "000"
+      assert ua.mnc == "000"
+      assert ua.osVersion == "0.1"
+      assert ua.osBuildNumber == "0.1"
+      assert ua.device == "Desktop"
+    end
+
+    test "overrides mcc/mnc/os_version/os_build_number/device_name from config" do
+      config =
+        Map.merge(@config, %{
+          mcc: "724",
+          mnc: "10",
+          os_version: "13",
+          os_build_number: "TQ3A.230901.001",
+          device_name: "Phone"
+        })
+
+      ua = AuthUtils.create_user_agent(config)
+
+      assert ua.mcc == "724"
+      assert ua.mnc == "10"
+      assert ua.osVersion == "13"
+      assert ua.osBuildNumber == "TQ3A.230901.001"
+      assert ua.device == "Phone"
+    end
   end
 
   describe "create_device_props/1" do
@@ -132,6 +161,13 @@ defmodule Amarula.Protocol.Auth.AuthUtilsTest do
       assert AuthUtils.create_user_agent(@android).platform == :ANDROID
       # default browser stays :WEB
       assert AuthUtils.create_user_agent(@config).platform == :WEB
+    end
+
+    test "device stays \"Desktop\" under :ANDROID unless device_name is explicitly overridden" do
+      assert AuthUtils.create_user_agent(@android).device == "Desktop"
+
+      assert AuthUtils.create_user_agent(Map.put(@android, :device_name, "Phone")).device ==
+               "Phone"
     end
 
     test "webInfo is omitted (nil) for android" do

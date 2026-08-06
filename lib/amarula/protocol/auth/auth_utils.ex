@@ -35,10 +35,15 @@ defmodule Amarula.Protocol.Auth.AuthUtils do
         }
 
   @type socket_config :: %{
-          version: list(non_neg_integer()),
-          browser: list(String.t()),
-          country_code: String.t(),
-          sync_full_history: boolean()
+          required(:version) => list(non_neg_integer()),
+          required(:browser) => list(String.t()),
+          required(:country_code) => String.t(),
+          required(:sync_full_history) => boolean(),
+          optional(:mcc) => String.t(),
+          optional(:mnc) => String.t(),
+          optional(:os_version) => String.t(),
+          optional(:os_build_number) => String.t(),
+          optional(:device_name) => String.t()
         }
 
   @doc """
@@ -155,6 +160,14 @@ defmodule Amarula.Protocol.Auth.AuthUtils do
 
   @doc """
   Create user agent information for ClientPayload.
+
+  `:mcc`/`:mnc`/`:os_version`/`:os_build_number`/`:device_name` are optional
+  `socket_config` overrides (all default to the same fixed values this always
+  sent) — every connection otherwise carrying the exact same carrier/OS/device
+  fingerprint is itself a signal. `:device_name` defaults to `"Desktop"`
+  regardless of `platform`; an Android-registered connection (see
+  `Amarula.Config`'s Android browser mode docs) should usually override it
+  explicitly (e.g. `device_name: "Phone"`) rather than claim to be a desktop.
   """
   @spec create_user_agent(socket_config()) :: Proto.ClientPayload.UserAgent.t()
   def create_user_agent(config) do
@@ -166,12 +179,12 @@ defmodule Amarula.Protocol.Auth.AuthUtils do
       },
       platform: if(android?(config.browser), do: :ANDROID, else: :WEB),
       releaseChannel: :RELEASE,
-      osVersion: "0.1",
-      device: "Desktop",
-      osBuildNumber: "0.1",
+      osVersion: Map.get(config, :os_version, "0.1"),
+      device: Map.get(config, :device_name, "Desktop"),
+      osBuildNumber: Map.get(config, :os_build_number, "0.1"),
       localeLanguageIso6391: "en",
-      mnc: "000",
-      mcc: "000",
+      mnc: Map.get(config, :mnc, "000"),
+      mcc: Map.get(config, :mcc, "000"),
       localeCountryIso31661Alpha2: config.country_code || "US"
     }
   end
