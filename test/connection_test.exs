@@ -1129,4 +1129,53 @@ defmodule Amarula.ConnectionTest do
       GenServer.stop(pid)
     end
   end
+
+  describe "keep-alive jitter (:keep_alive_jitter_ms)" do
+    test "reschedules at exactly the base interval when jitter is 0 (default)", %{
+      config: config
+    } do
+      config =
+        Map.merge(config, %{
+          frame_sink: self(),
+          connection_state: :connected,
+          keep_alive_interval_ms: 2000
+        })
+
+      {:ok, pid} = Connection.start_link(config, parent_pid: self())
+
+      send(pid, :send_keep_alive)
+      assert_receive {:frame_out, %Node{tag: "iq"}}, 1000
+
+      remaining = Process.read_timer(:sys.get_state(pid).keep_alive_timer)
+      assert_in_delta remaining, 2000, 50
+
+      GenServer.stop(pid)
+    end
+
+    test "reschedules within ±jitter of the base interval, and varies across cycles", %{
+      config: config
+    } do
+      config =
+        Map.merge(config, %{
+          frame_sink: self(),
+          connection_state: :connected,
+          keep_alive_interval_ms: 2000,
+          keep_alive_jitter_ms: 1000
+        })
+
+      {:ok, pid} = Connection.start_link(config, parent_pid: self())
+
+      delays =
+        for _ <- 1..10 do
+          send(pid, :send_keep_alive)
+          assert_receive {:frame_out, %Node{tag: "iq"}}, 1000
+          Process.read_timer(:sys.get_state(pid).keep_alive_timer)
+        end
+
+      assert Enum.all?(delays, &(&1 >= 950 and &1 <= 3050))
+      assert delays |> Enum.uniq() |> length() > 1
+
+      GenServer.stop(pid)
+    end
+  end
 end

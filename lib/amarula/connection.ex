@@ -1417,11 +1417,15 @@ defmodule Amarula.Connection do
     last_recv = state.last_recv_time || System.monotonic_time(:millisecond)
 
     # Check if it's been a suspicious amount of time since server responded
-    # This could indicate the network is down
+    # This could indicate the network is down. The deadline uses the base
+    # interval plus jitter's full spread, not just the base — otherwise a
+    # jittered reschedule that legitimately waited longer than base could
+    # trip this check against its own timing.
     time_diff = System.monotonic_time(:millisecond) - last_recv
-    keep_alive_interval = state.config.keep_alive_interval_ms || 30_000
+    keep_alive_interval = keep_alive_interval_ms(state.config)
+    keep_alive_jitter = keep_alive_jitter_ms(state.config)
 
-    if time_diff > keep_alive_interval + 5000 do
+    if time_diff > keep_alive_interval + keep_alive_jitter + 5000 do
       # Connection lost - close connection
       Logger.error("Connection was lost - no response for #{time_diff}ms")
       new_state = handle_connection_error(state, :connection_lost)
@@ -1433,7 +1437,9 @@ defmodule Amarula.Connection do
         :connected ->
           new_state = send_ping_message(state)
           # Schedule next ping
-          timer = Process.send_after(self(), :send_keep_alive, keep_alive_interval)
+          timer =
+            Process.send_after(self(), :send_keep_alive, next_keep_alive_delay(state.config))
+
           {:noreply, %{new_state | keep_alive_timer: timer}}
 
         _ ->
@@ -3505,12 +3511,29 @@ defmodule Amarula.Connection do
     # NO immediate ping after handshake - first ping sent after keep_alive_interval_ms
     # Cancel any timer from a previous (re)connect so ping loops don't multiply.
     if state.keep_alive_timer, do: Process.cancel_timer(state.keep_alive_timer)
-    keep_alive_interval = state.config.keep_alive_interval_ms || 30_000
 
     # Schedule first ping after interval
-    timer = Process.send_after(self(), :send_keep_alive, keep_alive_interval)
+    timer = Process.send_after(self(), :send_keep_alive, next_keep_alive_delay(state.config))
 
     %{state | keep_alive_timer: timer}
+  end
+
+  defp keep_alive_interval_ms(config), do: config.keep_alive_interval_ms || 30_000
+  defp keep_alive_jitter_ms(config), do: Map.get(config, :keep_alive_jitter_ms, 0) || 0
+
+  # `keep_alive_jitter_ms` (default 0, matching Baileys' exact-interval timing)
+  # randomizes each reschedule by up to `±jitter`, so ping timing isn't
+  # perfectly periodic — a deliberate divergence from upstream, not a bug fix.
+  defp next_keep_alive_delay(config) do
+    base = keep_alive_interval_ms(config)
+    jitter = keep_alive_jitter_ms(config)
+
+    if jitter > 0 do
+      spread = jitter * 2 + 1
+      max(1000, base + :rand.uniform(spread) - jitter - 1)
+    else
+      base
+    end
   end
 
   defp send_ping_message(state) do
