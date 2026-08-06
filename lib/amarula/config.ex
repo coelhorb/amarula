@@ -24,6 +24,10 @@ defmodule Amarula.Config do
   | `:retry_delay` | `1000` | base reconnect backoff (ms) |
   | `:connect_timeout_ms` | `30_000` | WebSocket connect timeout |
   | `:keep_alive_interval_ms` | `30_000` | WA-level keep-alive ping interval |
+  | `:keep_alive_jitter_ms` | `0` | randomizes each keep-alive reschedule by up to `±keep_alive_jitter_ms`, so ping timing isn't perfectly periodic. `0` (default) keeps the exact-interval behavior. |
+  | `:mcc` / `:mnc` | `"000"` / `"000"` | mobile country/network code sent in `userAgent`. Every connection sharing the same fixed default is itself a fingerprint signal — override per profile if that matters for your use case. |
+  | `:os_version` / `:os_build_number` | `"0.1"` / `"0.1"` | OS version strings sent in `userAgent` |
+  | `:device_name` | `"Desktop"` | device label sent in `userAgent`. Stays `"Desktop"` even in Android browser mode (below) unless you override it — pick something that matches the platform you're claiming, e.g. `"Phone"` |
   | `:sender_idle_ms` | `1_000` | how long a per-recipient `ConversationSender` stays warm after its last send before stopping. Larger = fewer respawns/session re-reads under bursty traffic (useful with a disk-backed store); smaller = sheds processes faster after a fan-out |
   | `:custodian_idle_ms` | `30_000` | how long a per-record `SessionCustodian` (the Signal-session/sender-key lock) stays warm after its last op before shedding. Write-through means an idle-stop loses nothing; the next op restarts it. Larger = fewer respawns/session re-reads for chatty peers; smaller = sheds idle locks faster |
   | `:sync_full_history` | `true` | at **pairing**, ask the phone for *full* history vs a recent window (desktop only). A *depth* knob — distinct from `:sync_history`, which decides whether history is processed at all. |
@@ -113,12 +117,18 @@ defmodule Amarula.Config do
     retry_delay: 1000,
     connect_timeout_ms: 30_000,
     keep_alive_interval_ms: 30_000,
+    keep_alive_jitter_ms: 0,
     fire_init_queries: true,
     mark_online_on_connect: true,
     sync_full_history: true,
     sync_history: true,
     sync_app_state: true,
     country_code: "US",
+    mcc: "000",
+    mnc: "000",
+    os_version: "0.1",
+    os_build_number: "0.1",
+    device_name: "Desktop",
     # http/ws handshake
     headers: [],
     origin: "https://web.whatsapp.com",
