@@ -35,11 +35,16 @@ defmodule Amarula.Protocol.Socket.WebSocketClient do
     * `:headers` - List or map of HTTP headers
     * `:origin` - `Origin` header for the handshake (defaults to WhatsApp Web's origin)
     * `:agent` - `User-Agent` header for the handshake (defaults to `"Mozilla/5.0"`)
+    * `:connect_timeout_ms` - TCP connect deadline (defaults to `30_000`)
     * Other options for timeouts and configuration
 
   `:origin`/`:agent` are sent as real `Origin`/`User-Agent` headers unless
   `:headers` already sets one of those keys (case-insensitively), in which
   case the explicit `:headers` entry wins.
+
+  `:connect_timeout_ms` is passed to WebSockex as `:socket_connect_timeout`
+  (WebSockex's own option name) — leaving it unset would silently fall back
+  to WebSockex's 6-second default instead of this module's 30-second one.
   """
   def start_link(opts \\ []) do
     Logger.debug("Starting WebSocket client connection to WhatsApp server")
@@ -81,9 +86,14 @@ defmodule Amarula.Protocol.Socket.WebSocketClient do
       parent_pid: parent_pid
     }
 
-    # WebSockex options
+    # WebSockex options. `:socket_connect_timeout` (not `:connect_timeout_ms`,
+    # which is this module's own option name) is what WebSockex actually
+    # reads for the TCP connect deadline — it defaults to 6s, so leaving it
+    # unset silently ignored the configured `connect_timeout_ms` (default
+    # 30s): every connection used WebSockex's 6s default regardless of config.
     websocket_opts = [
       extra_headers: headers_list,
+      socket_connect_timeout: connect_timeout_ms,
       async: true
     ]
 
