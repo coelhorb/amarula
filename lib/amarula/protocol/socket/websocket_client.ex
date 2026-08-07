@@ -64,20 +64,12 @@ defmodule Amarula.Protocol.Socket.WebSocketClient do
     origin = opts[:origin] || Application.get_env(:amarula, :origin, "https://web.whatsapp.com")
     agent = opts[:agent] || "Mozilla/5.0"
 
-    # Convert headers to list format
-    headers_list =
-      case headers do
-        h when is_map(h) -> Enum.map(h, fn {k, v} -> {k, v} end)
-        h when is_list(h) -> h
-        _ -> []
-      end
-
     # `origin`/`agent` were being computed (and logged) but never actually
     # added to the request — the handshake went out with no Origin/User-Agent
     # header at all unless the caller duplicated them into `:headers`
     # manually. An explicit `:headers` entry still wins over these (matched
     # case-insensitively, since HTTP header names are).
-    headers_list = with_origin_and_agent(headers_list, origin, agent)
+    headers_list = build_headers(headers, origin, agent)
 
     # Build initial state struct
     state = %__MODULE__{
@@ -106,18 +98,37 @@ defmodule Amarula.Protocol.Socket.WebSocketClient do
   end
 
   @doc """
-  Adds `Origin`/`User-Agent` headers to `headers_list`, unless it already has
-  one of those keys (matched case-insensitively), in which case the explicit
-  entry wins. Public so this can be unit-tested without a live connection.
+  Normalizes `headers` (a list or map — anything else becomes `[]`) and adds
+  `Origin`/`User-Agent`, unless it already has one of those keys (matched
+  case-insensitively), in which case the explicit entry wins. Public so this
+  can be unit-tested without a live connection.
   """
-  @spec with_origin_and_agent([{String.t(), String.t()}], String.t(), String.t()) ::
-          [{String.t(), String.t()}]
-  def with_origin_and_agent(headers_list, origin, agent) do
-    existing_keys = MapSet.new(headers_list, fn {key, _value} -> String.downcase(key) end)
+  @spec build_headers(term(), String.t(), String.t()) :: [{String.t(), String.t()}]
+  def build_headers(headers, origin, agent) do
+    headers
+    |> case do
+      h when is_map(h) -> Enum.map(h, fn {k, v} -> {k, v} end)
+      h when is_list(h) -> h
+      _ -> []
+    end
+    |> put_new_header("Origin", origin)
+    |> put_new_header("User-Agent", agent)
+  end
 
-    [{"Origin", origin}, {"User-Agent", agent}]
-    |> Enum.reject(fn {key, _value} -> MapSet.member?(existing_keys, String.downcase(key)) end)
-    |> Kernel.++(headers_list)
+  # Append `{name, value}` unless the caller already supplied that header.
+  # HTTP header names are case-insensitive, so the comparison has to be too —
+  # otherwise a caller passing "user-agent" would get a duplicate header.
+  defp put_new_header(headers, name, value) do
+    downcased = String.downcase(name)
+
+    already_set? =
+      Enum.any?(headers, fn
+        {k, _v} when is_binary(k) -> String.downcase(k) == downcased
+        {k, _v} when is_atom(k) -> k |> Atom.to_string() |> String.downcase() == downcased
+        _ -> false
+      end)
+
+    if already_set?, do: headers, else: headers ++ [{name, value}]
   end
 
   @doc """
