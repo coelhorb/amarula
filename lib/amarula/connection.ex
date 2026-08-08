@@ -1093,10 +1093,16 @@ defmodule Amarula.Connection do
       state
       | connection_state: :disconnected,
         websocket_client: nil,
+        last_error: {:closed, data},
         retry_count: state.retry_count + 1
     }
 
-    # Emit connection update event
+    # Emit :error on every close, same as handle_connection_error/2 does for the
+    # {:ws_event, _, {:error, _}} path. Without this, a consumer that gives up after
+    # its own error count (tracking :error, not :connection_update) never sees a
+    # run of clean closes coming — and once THIS process exhausts max_retries and
+    # gives up internally, it goes silently to :closed with no :error at all.
+    emit_event(new_state, :error, {:closed, data})
     emit_connection_update(new_state, :disconnected)
 
     # Attempt reconnection if not manually disconnected
