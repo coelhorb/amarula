@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.8] - 2026-08-08
+
+### Fixed
+
+- **A clean WebSocket close now emits `:error` too, not just `:connection_update`.**
+  The `{:ws_event, _, {:error, _}}` path (`handle_connection_error/2`) always
+  announced `{:amarula, :error, reason}` on every attempt, win or lose. The
+  `{:ws_event, _, {:close, _}}` path never did — it only ever emitted
+  `:connection_update`. A consumer that tracks its own give-up counter off
+  `:error` (as one on top of this library's own retry loop would) never saw a
+  run of clean closes coming, and once *this* library exhausted its own
+  `max_retries` and gave up internally, the consumer learned only that
+  `:connection_update` said `:closed` — never why, and with no `:error` to hang
+  its own "give up" logic on. Every handled close now emits both
+  `{:amarula, :error, {:closed, data}}` and the down-transition
+  `:connection_update`, symmetric with the error path.
+
 ## [0.5.7] - 2026-08-05
 
 ### Changed

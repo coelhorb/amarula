@@ -303,6 +303,7 @@ defmodule Amarula.ConnectionTest do
 
       send(pid, {:ws_event, nil, {:close, :test}})
 
+      assert_receive {:amarula, :error, {:closed, :test}}
       assert_receive {:amarula, :connection_update, %{connection: :disconnected}}
       GenServer.stop(pid)
     end
@@ -490,6 +491,21 @@ defmodule Amarula.ConnectionTest do
       send(pid, {:ws_event, nil, {:error, :econnreset}})
 
       assert_receive {:amarula, :error, :econnreset}
+      assert_receive {:amarula, :connection_update, %{connection: :disconnected}}
+      GenServer.stop(pid)
+    end
+
+    test "a clean close emits :error too, not just :connection_update", %{config: config} do
+      # The mirror image of the test above: the {:close, _} path used to emit only
+      # :connection_update, never :error — so a consumer tracking its OWN retry
+      # count off {:amarula, :error, _} (as handle_connection_error's callers do)
+      # never counted a run of clean closes, and never learned WHY the connection
+      # went down. Every handled close must announce both.
+      {:ok, pid} = Connection.start_link(config, parent_pid: self())
+
+      send(pid, {:ws_event, nil, {:close, :stream_end}})
+
+      assert_receive {:amarula, :error, {:closed, :stream_end}}
       assert_receive {:amarula, :connection_update, %{connection: :disconnected}}
       GenServer.stop(pid)
     end
@@ -1026,10 +1042,14 @@ defmodule Amarula.ConnectionTest do
       # is NOT treated as stale (nil == current) and counts toward give-up.
       # Close 1: retry_count 0 -> 1 (< 2) → :disconnected + a (far-future) reconnect.
       send(pid, {:ws_event, nil, {:close, :test}})
+      assert_receive {:amarula, :error, {:closed, :test}}
       assert_receive {:amarula, :connection_update, %{connection: :disconnected}}
 
-      # Close 2: retry_count 1 -> 2 (not < 2) → give up → :closed.
+      # Close 2: retry_count 1 -> 2 (not < 2) → give up → :closed. :error still
+      # fires for this attempt too — give-up only changes the :connection_update
+      # that follows it, not whether :error is announced.
       send(pid, {:ws_event, nil, {:close, :test}})
+      assert_receive {:amarula, :error, {:closed, :test}}
       assert_receive {:amarula, :connection_update, %{connection: :closed}}
 
       # It stays closed and attempts no further reconnect — a reconnect would run
