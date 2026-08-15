@@ -116,6 +116,7 @@ defmodule Amarula.Connection do
     :qr_refs,
     :qr_timer,
     :task_supervisor,
+    failure_recorded: false,
     pending_iqs: %{},
     msg_retry_counts: %{},
     pending_sends: %{},
@@ -149,6 +150,7 @@ defmodule Amarula.Connection do
           max_retries: non_neg_integer(),
           retry_delay: non_neg_integer(),
           retry_timer: reference() | nil,
+          failure_recorded: boolean(),
           parent_pid: sink(),
           parent_monitor: reference() | nil,
           instance_id: reference() | nil,
@@ -1088,35 +1090,37 @@ defmodule Amarula.Connection do
     Logger.debug("WebSocket connection closed: #{inspect(data)}")
 
     # Drop the pid so further events from this socket are ignored as stale.
-    # Count the close toward backoff/give-up like the error path does.
-    new_state = %{
-      state
-      | connection_state: :disconnected,
-        websocket_client: nil,
-        last_error: {:closed, data},
-        retry_count: state.retry_count + 1
-    }
+    state = %{state | websocket_client: nil, last_error: {:closed, data}}
 
     # Emit :error on every close, same as handle_connection_error/2 does for the
     # {:ws_event, _, {:error, _}} path. Without this, a consumer that gives up after
     # its own error count (tracking :error, not :connection_update) never sees a
     # run of clean closes coming — and once THIS process exhausts max_retries and
     # gives up internally, it goes silently to :closed with no :error at all.
-    emit_event(new_state, :error, {:closed, data})
-    emit_connection_update(new_state, :disconnected)
+    emit_event(state, :error, {:closed, data})
 
-    # Attempt reconnection if not manually disconnected
-    new_state =
-      if new_state.retry_count < new_state.max_retries do
-        schedule_reconnect(new_state)
-      else
-        Logger.error("Max retry attempts reached, giving up")
-        updated = %{new_state | connection_state: :closed}
-        emit_connection_update(updated, :closed)
-        updated
-      end
+    # Count the close toward backoff/give-up like the error path does — unless it
+    # is the tail of an incident already counted there (a stream error, say, whose
+    # socket the server then closes: one incident, one retry).
+    case record_failure(state) do
+      {:already_recorded, new_state} ->
+        {:noreply, new_state}
 
-    {:noreply, new_state}
+      {:recorded, new_state} ->
+        new_state = %{new_state | connection_state: :disconnected}
+
+        # Emit connection update event
+        emit_connection_update(new_state, :disconnected)
+
+        # Attempt reconnection if not manually disconnected
+        new_state = schedule_reconnect_or_give_up(new_state)
+
+        if new_state.connection_state == :closed do
+          emit_connection_update(new_state, :closed)
+        end
+
+        {:noreply, new_state}
+    end
   end
 
   @impl GenServer
@@ -1496,7 +1500,14 @@ defmodule Amarula.Connection do
     # orphan the previous client — tear it down before starting a new one.
     state = if state.websocket_client, do: disconnect_websocket(state), else: state
 
-    new_state = %{state | connection_state: :connecting}
+    # A new attempt opens a new failure window: whatever drop this one ends in
+    # gets counted once, however many events it arrives as. Any retry still armed
+    # is void now that we are connecting — including the one that woke us.
+    new_state = %{
+      cancel_retry_timer(state)
+      | connection_state: :connecting,
+        failure_recorded: false
+    }
 
     # Start connection timeout timer
     timeout_timer =
@@ -1595,37 +1606,64 @@ defmodule Amarula.Connection do
       _ -> Logger.error("Connection error: #{inspect(error)}")
     end
 
-    new_state = %{
-      state
-      | connection_state: :disconnected,
-        last_error: error,
-        retry_count: state.retry_count + 1
-    }
-
     # Cancel connection timeout timer
     if state.connection_timeout_timer do
       Process.cancel_timer(state.connection_timeout_timer)
     end
 
-    # Emit error event
-    emit_event(new_state, :error, error)
+    case record_failure(state) do
+      {:already_recorded, state} ->
+        # A later event of an incident already counted and already announced.
+        # Surface the detail to the consumer, but don't re-count it, don't
+        # re-announce the down-transition, and above all don't arm a second
+        # reconnect for the same drop.
+        state = %{state | last_error: error}
+        emit_event(state, :error, error)
+        state
 
-    # Schedule reconnection if within retry limit
-    new_state =
-      if new_state.retry_count < new_state.max_retries do
-        schedule_reconnect(new_state)
-      else
-        Logger.error("Max retry attempts reached, giving up")
-        %{new_state | connection_state: :closed}
-      end
+      {:recorded, state} ->
+        state = %{state | connection_state: :disconnected, last_error: error}
 
-    # Announce the down-transition. Previously the error paths emitted only
-    # :error, never the :connection_update the clean-close path emits — so a
-    # consumer tracking connection state never saw the drop and its UI went stale
-    # on the last "open". Emit the resulting state (:disconnected, or :closed once
-    # retries are exhausted).
-    emit_connection_update(new_state, new_state.connection_state)
-    new_state
+        # Emit error event
+        emit_event(state, :error, error)
+
+        state = schedule_reconnect_or_give_up(state)
+
+        # Announce the down-transition. Previously the error paths emitted only
+        # :error, never the :connection_update the clean-close path emits — so a
+        # consumer tracking connection state never saw the drop and its UI went
+        # stale on the last "open". Emit the resulting state (:disconnected, or
+        # :closed once retries are exhausted).
+        emit_connection_update(state, state.connection_state)
+        state
+    end
+  end
+
+  # One failure per connection attempt.
+  #
+  # A single drop reaches us as a burst, one event per handler: WhatsApp sends a
+  # `stream_error` node, then closes the socket, then the stream ends. Counting
+  # each of them spent several retries on one incident — and, worse, armed a
+  # reconnect timer per event: the first fired and opened a socket, the next tore
+  # it straight down (`attempt_connection/1`) for another attempt. From the
+  # server's side that is a client reconnecting twice in a row for no reason,
+  # right after it asked us to back off.
+  #
+  # So the unit is the *attempt*, not the event: the first failure after a
+  # connection attempt counts and schedules the retry, the rest of the burst only
+  # surfaces its event. `attempt_connection/1` opens the next window.
+  defp record_failure(%{failure_recorded: true} = state), do: {:already_recorded, state}
+
+  defp record_failure(state),
+    do: {:recorded, %{state | failure_recorded: true, retry_count: state.retry_count + 1}}
+
+  defp schedule_reconnect_or_give_up(state) do
+    if state.retry_count < state.max_retries do
+      schedule_reconnect(state)
+    else
+      Logger.error("Max retry attempts reached, giving up")
+      %{state | connection_state: :closed}
+    end
   end
 
   defp schedule_reconnect(state) do
@@ -1638,8 +1676,27 @@ defmodule Amarula.Connection do
       attempt: state.retry_count
     })
 
-    retry_timer = Process.send_after(self(), :reconnect, delay)
-    %{state | retry_timer: retry_timer}
+    # Never leave two reconnects armed: whatever `record_failure/1` lets through,
+    # an unrelated path (a give-up followed by a manual :connect, say) must not be
+    # able to stack timers either. One armed timer at a time is the invariant.
+    state = cancel_retry_timer(state)
+    %{state | retry_timer: Process.send_after(self(), :reconnect, delay)}
+  end
+
+  defp cancel_retry_timer(%{retry_timer: nil} = state), do: state
+
+  defp cancel_retry_timer(%{retry_timer: timer} = state) do
+    # `false` means it already fired: the :reconnect is in our mailbox, so drop it
+    # there instead — cancelling a spent timer would leave it to run anyway.
+    if Process.cancel_timer(timer) == false do
+      receive do
+        :reconnect -> :ok
+      after
+        0 -> :ok
+      end
+    end
+
+    %{state | retry_timer: nil}
   end
 
   defp calculate_retry_delay(retry_count, base_delay) do
