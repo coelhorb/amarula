@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **One drop is now one failure: no more double-counted retries and no more two
+  reconnects racing for the same drop.** A single incident reaches `Connection`
+  as a burst — WhatsApp sends a `stream:error` node, then closes the socket, then
+  the stream ends — and each event landed in a different handler that incremented
+  `retry_count` *and* called `schedule_reconnect/1`. Two costs: `max_retries` was
+  spent in a third of the drops it was configured for, and `schedule_reconnect/1`
+  overwrote `retry_timer` without cancelling the previous one, so both timers
+  fired. The first opened a socket and the second tore it straight down
+  (`attempt_connection/1`) to open another — from the server's side, a client
+  reconnecting twice in a row right after being told to back off (a 503, say).
+
+  The unit is now the connection *attempt*: the first failure after an attempt
+  counts and schedules the retry, and the rest of the burst only surfaces its
+  `:error` event. `schedule_reconnect/1` also cancels any armed timer (and drops
+  an already-delivered `:reconnect`) before arming a new one, so one timer at a
+  time is an invariant rather than a coincidence.
+
+  `max_retries` therefore counts failed *attempts*, not failure *events* — the
+  documented meaning, but a consumer tuned to the old behaviour will see the
+  connection persist longer before giving up. The 515 pairing restart is
+  unaffected: it stays on its own immediate-restart path and counts nothing.
+
 ## [0.5.7] - 2026-08-05
 
 ### Changed
