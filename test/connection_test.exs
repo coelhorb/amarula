@@ -526,8 +526,14 @@ defmodule Amarula.ConnectionTest do
       end
     end
 
-    # Drive one consumer emit through the same path the consumer sees.
-    defp drive_emit(pid), do: send(pid, {:ws_event, nil, {:close, :test}})
+    # Drive one consumer emit through the same path the consumer sees. Each drive
+    # opens its own failure window first: a drop is counted and announced once per
+    # connection attempt (`record_failure/1`), so back-to-back closes would be one
+    # incident and emit once — correct in production, beside the point here.
+    defp drive_emit(pid) do
+      :sys.replace_state(pid, &%{&1 | failure_recorded: false})
+      send(pid, {:ws_event, nil, {:close, :test}})
+    end
 
     test "set_parent re-points the sink without bouncing the connection", %{config: config} do
       {:ok, pid} = Connection.start_link(config, parent_pid: self())
@@ -1029,36 +1035,108 @@ defmodule Amarula.ConnectionTest do
   end
 
   describe "retry give-up (max_retries exhausted → :closed, no more reconnects)" do
-    test "repeated closes drive the count to the limit, then :closed, then stop reconnecting",
-         %{config: config} do
-      # retry_count now increments on the websocket {:close, _} path (not just the
-      # error path) and is reset only in finish_login. With a tiny max_retries and a
-      # long retry_delay — so the scheduled :reconnect never fires during the test —
-      # repeated closes reach the limit and flip the connection to :closed.
-      config = %{config | max_retries: 2, retry_delay: 60_000}
+    # The unit is the connection *attempt*, not the event: one drop reaches us as a
+    # burst (stream error → socket close → stream end), and counting each of them
+    # spent the retry budget in one incident while arming a reconnect timer per
+    # event — the first opened a socket, the next tore it down for another attempt,
+    # so the server saw us connect twice in a row right after asking us to back off.
+    #
+    # A local listener that accepts TCP but never answers the WS upgrade keeps the
+    # socket alive and quiet, so the only failures are the ones the test injects.
+    setup do
+      {:ok, listen} = :gen_tcp.listen(0, ip: {127, 0, 0, 1})
+      {:ok, port} = :inet.port(listen)
+      on_exit(fn -> :gen_tcp.close(listen) end)
+      %{url: "ws://127.0.0.1:#{port}/ws"}
+    end
+
+    test "one incident counts once, however many events it arrives as", %{
+      config: config,
+      url: url
+    } do
+      # retry_delay is long enough that the scheduled :reconnect never fires here.
+      config = %{config | max_retries: 2, retry_delay: 60_000, wa_websocket_url: url}
+      {:ok, pid} = Connection.start_link(config, parent_pid: self())
+      :ok = GenServer.call(pid, :connect)
+      ws = :sys.get_state(pid).websocket_client
+
+      # The incident: a 503 stream error, then the server closing that socket.
+      send(
+        pid,
+        {:inject_node, %Node{tag: "stream:error", attrs: %{"code" => "503"}, content: nil}}
+      )
+
+      assert_receive {:amarula, :connection_update, %{connection: :disconnected}}, 1000
+      send(pid, {:ws_event, ws, {:close, :test}})
+
+      # Counted once, announced once — and with max_retries: 2 the connection is NOT
+      # given up on, which is what a double count would have done here.
+      state = :sys.get_state(pid)
+      assert state.retry_count == 1
+      assert state.connection_state == :disconnected
+      refute_receive {:amarula, :connection_update, %{connection: :closed}}, 100
+
+      Process.unlink(pid)
+      Process.exit(pid, :kill)
+    end
+
+    test "a failure per attempt still reaches the limit, then :closed, then stops", %{
+      config: config,
+      url: url
+    } do
+      config = %{config | max_retries: 2, retry_delay: 60_000, wa_websocket_url: url}
       {:ok, pid} = Connection.start_link(config, parent_pid: self())
 
-      # websocket_client is nil on a fresh start, so {:ws_event, nil, {:close, _}}
-      # is NOT treated as stale (nil == current) and counts toward give-up.
-      # Close 1: retry_count 0 -> 1 (< 2) → :disconnected + a (far-future) reconnect.
-      send(pid, {:ws_event, nil, {:close, :test}})
-      assert_receive {:amarula, :error, {:closed, :test}}
-      assert_receive {:amarula, :connection_update, %{connection: :disconnected}}
+      # Attempt 1 → close: retry_count 0 -> 1 (< 2) → :disconnected + a far-future retry.
+      :ok = GenServer.call(pid, :connect)
+      # Drain the attempt's own :connecting, so the refute at the end can only match
+      # a *reconnect* the connection drove by itself.
+      assert_receive {:amarula, :connection_update, %{connection: :connecting}}, 1000
+      send(pid, {:ws_event, :sys.get_state(pid).websocket_client, {:close, :test}})
+      assert_receive {:amarula, :error, {:closed, :test}}, 1000
+      assert_receive {:amarula, :connection_update, %{connection: :disconnected}}, 1000
 
-      # Close 2: retry_count 1 -> 2 (not < 2) → give up → :closed. :error still
-      # fires for this attempt too — give-up only changes the :connection_update
-      # that follows it, not whether :error is announced.
-      send(pid, {:ws_event, nil, {:close, :test}})
-      assert_receive {:amarula, :error, {:closed, :test}}
-      assert_receive {:amarula, :connection_update, %{connection: :closed}}
+      # Attempt 2 → close: retry_count 1 -> 2 (not < 2) → give up → :closed. :error
+      # still fires for this attempt too — give-up only changes the
+      # :connection_update that follows it, not whether :error is announced.
+      :ok = GenServer.call(pid, :connect)
+      assert_receive {:amarula, :connection_update, %{connection: :connecting}}, 1000
+      send(pid, {:ws_event, :sys.get_state(pid).websocket_client, {:close, :test}})
+      assert_receive {:amarula, :error, {:closed, :test}}, 1000
+      assert_receive {:amarula, :connection_update, %{connection: :closed}}, 1000
 
       # It stays closed and attempts no further reconnect — a reconnect would run
-      # attempt_connection and emit :connecting. The only scheduled retry timer is
-      # 60s+ out, so nothing fires in the test window.
+      # attempt_connection and emit :connecting.
       assert :sys.get_state(pid).connection_state == :closed
       refute_receive {:amarula, :connection_update, %{connection: :connecting}}, 100
 
-      GenServer.stop(pid)
+      Process.unlink(pid)
+      Process.exit(pid, :kill)
+    end
+
+    test "a reconnect is never armed twice for the same drop", %{config: config, url: url} do
+      config = %{config | max_retries: 5, retry_delay: 60_000, wa_websocket_url: url}
+      {:ok, pid} = Connection.start_link(config, parent_pid: self())
+      :ok = GenServer.call(pid, :connect)
+      ws = :sys.get_state(pid).websocket_client
+
+      send(
+        pid,
+        {:inject_node, %Node{tag: "stream:error", attrs: %{"code" => "503"}, content: nil}}
+      )
+
+      assert_receive {:amarula, :connection_update, %{connection: :disconnected}}, 1000
+      armed = :sys.get_state(pid).retry_timer
+      assert is_reference(armed)
+
+      # The rest of the burst must not replace the armed timer with a second one —
+      # the orphaned first would fire on its own and drive a redundant attempt.
+      send(pid, {:ws_event, ws, {:close, :test}})
+      send(pid, {:inject_node, %Node{tag: "xmlstreamend", attrs: %{}, content: nil}})
+      assert :sys.get_state(pid).retry_timer == armed
+
+      Process.unlink(pid)
+      Process.exit(pid, :kill)
     end
   end
 
