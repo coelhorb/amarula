@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.8] - 2026-08-20
+
 Found by reviewing upstream Baileys for portable changes (see `docs/PARITY.md`).
 Three of the four are bugs Amarula had independently; none needed a consumer-visible
 API change.
@@ -1295,7 +1297,8 @@ First public release.
   the supervision tree down and frees the profile slot). The server-side
   device-unlink now lives only in `wipe_credentials/1`.
 
-[Unreleased]: https://github.com/tubedude/amarula/compare/v0.5.7...HEAD
+[Unreleased]: https://github.com/tubedude/amarula/compare/v0.5.8...HEAD
+[0.5.8]: https://github.com/tubedude/amarula/compare/v0.5.7...v0.5.8
 [0.5.7]: https://github.com/tubedude/amarula/compare/v0.5.6...v0.5.7
 [0.5.6]: https://github.com/tubedude/amarula/compare/v0.5.5...v0.5.6
 [0.5.5]: https://github.com/tubedude/amarula/compare/v0.5.4...v0.5.5
