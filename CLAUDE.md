@@ -2,6 +2,109 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## THIS IS A FORK
+
+> **Everything in this section is fork-local** — `coelhorb/amarula`, forked from
+> `tubedude/amarula`. The rest of this file is upstream's and matches it
+> verbatim. Expect this section as a conflict when merging upstream; keep it and
+> take upstream's side for everything below it.
+
+### Branches — read this before touching git
+
+| branch | what it is |
+|---|---|
+| `main` | **Pure mirror of `upstream/main`.** Never commit here. Updated only by `git merge --ff-only upstream/main`. |
+| `fork_diff` | **The integration branch, and the one actually used.** Everything of ours lives here. |
+
+The remote `upstream` is `https://github.com/tubedude/amarula`. If `git remote
+-v` doesn't list it, add it — the sync workflow below depends on it.
+
+A commit on `main` breaks the mirror, and with it the `--ff-only` guarantee:
+every future sync becomes a merge with a conflict-prone lock. If something on
+`main` needs fixing, the fix goes upstream as a PR (see below), not onto `main`.
+
+### Syncing with upstream
+
+```bash
+git fetch upstream
+git checkout main && git merge --ff-only upstream/main   # must fast-forward
+git checkout fork_diff && git merge upstream/main        # merge, never rebase
+mix ci                                                    # before any push
+```
+
+**Merge, not rebase** — `fork_diff` is published and other work depends on it, so
+it is never force-pushed.
+
+Expect conflicts in exactly these places, all editorial:
+
+- **`mix.exs`** — the version line. See versioning below.
+- **`CHANGELOG.md`** — competing entries at the top.
+- **`.github/workflows/elixir.yml`** — our `fork_diff` line in `on.push.branches`.
+- **This section of `CLAUDE.md`.**
+
+Code conflicts are not expected. Our diff touches **exactly four files** under
+`lib/`, and nothing else:
+
+- `protocol/socket/websocket_client.ex` — headers, connect timeout
+- `config.ex` and `protocol/auth/auth_utils.ex` — device fingerprint, jitter
+- `connection.ex` — 9 hunks, 8 of them in the first ~1700 lines plus one near
+  3500, in a ~5000-line file
+
+`connection.ex` is the one to watch: both sides edit it, and upstream's hunks
+have so far landed past line 1700, which is why it keeps auto-merging. That is
+luck holding, not a guarantee — **`mix ci` is what confirms a merge, not the
+absence of conflict markers.**
+
+### Versioning — the fork numbers above upstream
+
+Both projects independently released a `0.5.8`, with different contents. The
+resolution, and the rule going forward:
+
+- The fork's version in `mix.exs` stays **above** upstream's. Upstream released
+  `0.5.8`; the fork is at `0.5.10`.
+- Fork tags carry a **`-fork_diff` suffix**: `v0.5.10-fork_diff`.
+- CHANGELOG headings match the tags — `## [0.5.9-fork_diff]` is ours, a heading
+  with **no suffix** is upstream's. Link refs for fork versions point at
+  `coelhorb/amarula`.
+- Never renumber a heading whose tag is already published.
+
+### CI
+
+Both `main` and `fork_diff` run `.github/workflows/elixir.yml` on push. The
+`fork_diff` entry is our line — see the comment on it in the workflow.
+
+**`mix ci` is the local mirror of that workflow, and it is the gate to trust.**
+It runs both CI jobs (`audit` and `test`) plus Dialyzer, ordered cheapest-first;
+a failing step aborts the rest. What it cannot cover: CI runs the test job
+across a matrix (Elixir 1.18/OTP 27, 1.19/28, 1.20/29) and `mix ci` runs only
+your local pair.
+
+**`main` may legitimately be red** while upstream is. It mirrors upstream's
+`mix.lock`, so an advisory there fails our `audit` job too, and we can't fix it
+on `main` without breaking the mirror. Check whether upstream's CI is red for
+the same reason before investigating. As of 2026-08-26 this was the case
+(`xml_builder` 2.4.0 advisories) with fixes pending as tubedude/amarula#90 and
+#91 — verify their state rather than trusting this line.
+
+### Sending fixes upstream
+
+For anything not fork-specific — dependency bumps, CI fixes, real bugs —
+**prefer a PR to `tubedude/amarula` over carrying a local patch.** It shrinks
+the diff we maintain, and a fix that lands upstream reaches our `main` mirror
+for free.
+
+```bash
+git worktree add -b <branch> <path> upstream/main   # branch off upstream, not fork_diff
+# ... change, then verify ...
+gh pr create --repo tubedude/amarula --base main --head coelhorb:<branch>
+```
+
+Branch off `upstream/main` so the PR carries nothing of the fork. Upstream's CI
+runs on fork PRs, so the PR itself is the verification. Two of upstream's
+conventions worth matching: a **CI-only change gets no CHANGELOG entry**, and a
+`### Security` entry states honestly **whether the issue is actually reachable**
+in Amarula's code paths rather than just citing the advisory.
+
 ## Project Overview
 
 Amarula is an Elixir implementation of the WhatsApp Web protocol. It provides a complete client library for connecting to WhatsApp Web, handling authentication via QR codes, and sending/receiving messages. The project is structured around the WebSocket-based protocol used by WhatsApp Web, implementing the Noise Protocol for encryption, Signal Protocol for end-to-end encryption, and Protocol Buffers for message serialization.
@@ -36,6 +139,15 @@ mix credo
 
 # Security advisories in the resolved tree (CI runs this daily and on every push)
 mix hex.audit
+
+# THE GATE (fork-local). Everything CI enforces — both the `audit` and `test`
+# jobs — plus Dialyzer, cheapest-first, aborting on the first failure. Run it
+# before every push; see the CI notes in "THIS IS A FORK" above for what it
+# still can't cover.
+mix ci
+
+# Just format + tests, for a quick loop mid-change
+mix check
 ```
 
 **Every so often, refresh dependencies:**
