@@ -177,18 +177,33 @@ defmodule Amarula.MixProject do
   defp aliases do
     [
       check: ["format", "test"],
-      # The full gate, matching what .github/workflows/elixir.yml enforces plus
-      # Dialyzer. `format` rewrites first so `--check-formatted` only fails when
-      # something is genuinely unformattable. Credo is blocking and non-strict —
-      # the exact call the workflow makes. `--strict` is deliberately not used:
-      # it adds ~64 low-priority findings the workflow never checks, so a strict
-      # local gate would fail on code CI accepts.
+      # The full gate: everything .github/workflows/elixir.yml enforces (both
+      # jobs — `audit` and `test`), plus Dialyzer, which CI doesn't run.
+      #
+      # Ordered cheapest-first so a failure surfaces early — a failing step
+      # aborts the alias, so the ordering genuinely saves time rather than just
+      # reordering output. `deps.get` leads because both CI jobs run it and
+      # `hex.audit` errors out on an unfetched tree. `hex.audit` is next: it is
+      # the workflow's own separate job and needs no compile, so a retired
+      # package or a new advisory stops the run before a minute of Dialyzer.
+      # `format` rewrites first so `--check-formatted` only fails when
+      # something is genuinely unformattable.
+      #
+      # Credo is blocking and non-strict — the exact call the workflow makes.
+      # `--strict` is deliberately not used: it adds ~64 low-priority findings
+      # the workflow never checks, so a strict local gate would fail on code CI
+      # accepts.
+      #
+      # What this still can't catch: CI runs the test job across a matrix
+      # (Elixir 1.18/OTP 27, 1.19/28, 1.20/29); this runs only your local pair.
       ci: [
+        "deps.get",
+        "hex.audit",
         "format",
         "compile --warnings-as-errors",
         "format --check-formatted",
-        "test",
         "credo",
+        "test",
         "dialyzer"
       ]
     ]

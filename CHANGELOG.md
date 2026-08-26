@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **O alias `mix ci` deixou de passar verde enquanto o CI ia vermelho.** Ele
+  dizia espelhar `.github/workflows/elixir.yml`, mas rodava só o job `test` — o
+  job `audit`, com um `mix hex.audit` deliberadamente bloqueante, não estava na
+  lista. Um advisory novo no `mix.lock` (que é justamente o que o `audit` roda
+  diariamente, por chegar sem push nosso) só aparecia depois do push. O alias
+  agora roda os dois jobs.
+
+  Junto, `mix deps.get` entrou na frente: os dois jobs do workflow o rodam, e
+  `hex.audit` erra num tree não baixado — sem ele o gate falhava de forma
+  confusa num clone limpo.
+
+  A ordem passou a ser cheapest-first (`deps.get`, `hex.audit`, `format`,
+  `compile`, `--check-formatted`, `credo`, `test`, `dialyzer`). Uma etapa que
+  falha aborta o alias, então a ordem economiza tempo de verdade: um advisory
+  agora para a execução em segundos, em vez de depois de ~1min de Dialyzer.
+
+### Security
+
+- **`xml_builder` 2.4.0 → 2.4.1**, limpando os três advisories LOW que deixavam
+  `mix hex.audit` vermelho (EEF-CVE-2026-47079 escaping de entidades no
+  round-trip, -47080 breakout de seção CDATA via `]]>` não sanitizado, -48590
+  nomes de elemento/atributo injetados verbatim). Dependência transitiva, via
+  `qr_code`, que pede `~> 2.3` — coube sem mexer em nenhuma restrição nossa.
+
 ## [0.5.10-fork_diff] - 2026-08-26
 
 Sincronização com o upstream: `tubedude/amarula` v0.5.8 mergeado no fork. As
