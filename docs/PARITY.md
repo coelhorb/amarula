@@ -35,7 +35,12 @@ Run these checks from the Baileys checkout (one level up from `amarula/`).
 ```bash
 # Fetch the latest upstream and see what landed since our pinned commit.
 git fetch origin
-PINNED=7e7b0757e3f9f3c7789fb1cfd2f241d5002a199a   # the commit pinned above
+# Read the watermark straight out of the table above, so there is only ONE copy of
+# it in this file. A hardcoded SHA here drifted out of step with the table and sent
+# anyone following this runbook diffing against the wrong base — which shows up as
+# phantom "unreviewed" commits.
+# (these commands run from the Baileys checkout, so amarula/ is one level up)
+PINNED=$(sed -n 's/^| Commit | `\(.*\)` |$/\1/p' ../amarula/docs/PARITY.md)
 
 # Commits we haven't reviewed yet:
 git log --oneline $PINNED..origin/master
@@ -254,9 +259,13 @@ Baileys and whatsmeow for anything unmerged but worth tracking.
   independent bug in Baileys' `requestPairingCode()` (resolves before the
   server responds) — Amarula had the same shape; see the Ported entry above
   for our fix.
-- **PR #2693** (open, unmerged) — broader desktop-platform fix superseding
-  #2741: also maps `Mac OS` + `Desktop` + `syncFullHistory` to
-  `UserAgent.Platform.MACOS` (currently always `WEB` unless Android).
-  Speculative/unreviewed by Baileys maintainers; Amarula's
-  `create_user_agent/1` has the same always-`WEB`-unless-Android gap. Revisit
-  once merged.
+
+  Re-checked 2026-08-20: still open, still no fix from either side (server or
+  client), still active reports from users unable to complete pairing.
+- **PR #2693** (closed 2026-08-20, stale-bot auto-close, never merged) —
+  broader desktop-platform fix superseding #2741: also maps `Mac OS` +
+  `Desktop` + `syncFullHistory` to `UserAgent.Platform.MACOS` (currently
+  always `WEB` unless Android). Amarula's `create_user_agent/1` has the same
+  always-`WEB`-unless-Android gap, but the PR is dead, not merely stale — no
+  longer tracking it. Re-open watching only if someone revives the idea
+  upstream.

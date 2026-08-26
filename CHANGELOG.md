@@ -7,7 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.5.9] - 2026-08-15
+## [0.5.10-fork_diff] - 2026-08-26
+
+Sincronização com o upstream: `tubedude/amarula` v0.5.8 mergeado no fork. As
+mudanças do upstream estão descritas na entrada `[0.5.8]` abaixo — nada aqui as
+duplica. Esta entrada cobre apenas o que é do fork.
+
+### Changed
+
+- **O alias `mix ci` voltou a tratar o Credo como bloqueante.** Ele rodava
+  `credo --strict --mute-exit-status` sob a justificativa de que o backlog do
+  upstream ainda não estava limpo. O upstream zerou esse backlog e tornou o
+  check bloqueante no CI, então o `--mute-exit-status` local só servia para
+  esconder regressões do fork até elas chegarem no CI.
+
+### Note
+
+- **Numeração do fork.** O fork e o upstream lançaram um `0.5.8` cada, com
+  conteúdos diferentes. As entradas do fork foram renomeadas para
+  `[0.5.8-fork_diff]` e `[0.5.9-fork_diff]`, casando com as tags
+  `v0.5.8-fork_diff`/`v0.5.9-fork_diff` que já estavam publicadas; a entrada
+  `[0.5.8]` sem sufixo é a do upstream. Daqui em diante a versão do fork segue
+  acima da do upstream — por isso `0.5.10`, e não `0.5.9`.
+
+## [0.5.9-fork_diff] - 2026-08-15
 
 ### Fixed
 
@@ -33,7 +56,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   connection persist longer before giving up. The 515 pairing restart is
   unaffected: it stays on its own immediate-restart path and counts nothing.
 
-## [0.5.8] - 2026-08-08
+## [0.5.8-fork_diff] - 2026-08-08
 
 ### Fixed
 
@@ -49,6 +72,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its own "give up" logic on. Every handled close now emits both
   `{:amarula, :error, {:closed, data}}` and the down-transition
   `:connection_update`, symmetric with the error path.
+## [0.5.8] - 2026-08-20
+
+Found by reviewing upstream Baileys for portable changes (see `docs/PARITY.md`).
+Three of the four are bugs Amarula had independently; none needed a consumer-visible
+API change.
+
+### Added
+
+- **`resolve_pn_to_lid` — opt-in PN→LID re-addressing for 1:1 sends**
+  ([Baileys#2683]). WhatsApp appears to evaluate the trusted-contact gate against the
+  **LID** identity, so a send addressed to a phone number can be accepted by the
+  socket and then discarded with ack `463` for a contact you know is reachable —
+  regardless of the token attached. With this on, a 1:1 send is re-addressed to the
+  contact's LID when the mapping is already known.
+
+  **Off by default**, and staying that way for now. The direction of travel is not in
+  doubt: WhatsApp has begun omitting `*_pn` attributes altogether, so clients now
+  reconstruct phone numbers locally. But upstream has attempted this exact change
+  twice ([Baileys#2711], [Baileys#2748]) and merged neither, while two LID-migration
+  bugs remain open there. Turning it on by default on that basis would be following a
+  change its own authors can't land.
+
+  Set `resolve_pn_to_lid: true` if you are seeing repeatable `463`s. One caveat:
+  device resolution then queries USync by LID, and an empty result surfaces as
+  `{:error, {:resolve_devices, :not_on_whatsapp}}` — accurate about the outcome,
+  misleading about the cause. See `Amarula.Connection.resolve_pn_to_lid?/1`.
+
+### Fixed
+
+- **A message containing a Facebook-interop jid no longer vanishes.** The binary
+  decoder had no clause for string tags `245` (INTEROP_JID) or `246` (FB_JID), so
+  either raised; the frame decoder rescues a decode failure and treats the frame as a
+  control frame, which **discarded the whole message**. One WA frame carries the
+  entire `<message>` node, so a single such jid anywhere inside it — including a
+  nested `<device>` — lost the message with no `:messages_upsert`, no receipt, and
+  **no ack or nack**, so the server never retransmitted. The only trace was one log
+  warning. Latent rather than reproducible: FB_JID is interop addressing WhatsApp
+  enables progressively.
+
+- **A trusted-contact token attached to an incoming message is no longer thrown
+  away.** Token ingestion had three sources, all reactive (our own issuance result, a
+  `privacy_token` notification, the history-sync blob). A contact could hand us their
+  token in the very message we were about to reply to, and the reply still went out
+  tokenless — accepted by the socket, dropped by the server with ack `463`. One
+  wasted send plus an issuance round-trip per warm contact, for a token already
+  present in the decoded node. Ported from [Baileys#2752].
+
+  Note this does not on its own eliminate `463`s; upstream shipped it alongside the
+  PN→LID change above, and their reports show LID-keyed tokens were not sufficient
+  by themselves.
+
+- **Editing your own message from your phone now surfaces as an edit.** A message you
+  send is fanned out to your linked devices wrapped in `deviceSentMessage`, and the
+  `messageContextInfo` — carrying the `messageSecret` — can sit on the **outer**
+  wrapper. Unwrapping dropped it, so a later `secretEncryptedMessage` edit had no key
+  and arrived as `{:other, _}` instead of `{:edit, key, text}`. Ported from
+  [Baileys#2743]. Still narrower than upstream there: Amarula tries two JID-form
+  combinations where upstream tries the full sender × editor product, so an edit whose
+  original was stored under a PN while the editor is LID-addressed can still fail.
+
+- **`Amarula.Content.Media.mimetype` no longer surfaces an explicit blank
+  string.** WhatsApp sometimes sends `mimetype` explicitly set to `""` (or
+  whitespace) rather than omitting the field, and `from_proto/2` passed that
+  through verbatim. `nil` is now the sole "no mimetype" value, matching the
+  moduledoc's contract. Found while reviewing a downstream consumer's own
+  workaround for the same gap.
 
 ## [0.5.7] - 2026-08-05
 
@@ -266,6 +355,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#70]: https://github.com/tubedude/amarula/pull/70
 [#71]: https://github.com/tubedude/amarula/pull/71
 [#72]: https://github.com/tubedude/amarula/pull/72
+[Baileys#2683]: https://github.com/WhiskeySockets/Baileys/issues/2683
+[Baileys#2711]: https://github.com/WhiskeySockets/Baileys/pull/2711
+[Baileys#2743]: https://github.com/WhiskeySockets/Baileys/pull/2743
+[Baileys#2748]: https://github.com/WhiskeySockets/Baileys/pull/2748
+[Baileys#2752]: https://github.com/WhiskeySockets/Baileys/pull/2752
 [#81]: https://github.com/tubedude/amarula/pull/81
 
 ## [0.5.5] - 2026-07-30
@@ -1277,7 +1371,11 @@ First public release.
   the supervision tree down and frees the profile slot). The server-side
   device-unlink now lives only in `wipe_credentials/1`.
 
-[Unreleased]: https://github.com/tubedude/amarula/compare/v0.5.7...HEAD
+[Unreleased]: https://github.com/coelhorb/amarula/compare/v0.5.10-fork_diff...HEAD
+[0.5.10-fork_diff]: https://github.com/coelhorb/amarula/compare/v0.5.9-fork_diff...v0.5.10-fork_diff
+[0.5.9-fork_diff]: https://github.com/coelhorb/amarula/compare/v0.5.8-fork_diff...v0.5.9-fork_diff
+[0.5.8-fork_diff]: https://github.com/coelhorb/amarula/compare/v0.5.7-fork_diff...v0.5.8-fork_diff
+[0.5.8]: https://github.com/tubedude/amarula/compare/v0.5.7...v0.5.8
 [0.5.7]: https://github.com/tubedude/amarula/compare/v0.5.6...v0.5.7
 [0.5.6]: https://github.com/tubedude/amarula/compare/v0.5.5...v0.5.6
 [0.5.5]: https://github.com/tubedude/amarula/compare/v0.5.4...v0.5.5

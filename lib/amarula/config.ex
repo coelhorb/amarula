@@ -1,5 +1,5 @@
 defmodule Amarula.Config do
-  @wa_version [2, 3000, 1_044_539_926]
+  @wa_version [2, 3000, 1_045_692_687]
 
   @moduledoc """
   Connection config + the single source of truth for protocol/connection defaults.
@@ -36,6 +36,7 @@ defmodule Amarula.Config do
   | `:mark_online_on_connect` | `true` | send presence-available on connect. `false` keeps this session **unavailable** — it appears offline to others and the **primary phone keeps receiving push notifications** (live messages are then queued offline rather than pushed to this session). |
   | `:fire_init_queries` | `true` | run the post-login init IQ queries (props/blocklist/privacy). `false` skips them — one more lever for a minimal ephemeral connect. |
   | `:country_code` | `"US"` | |
+  | `:resolve_pn_to_lid` | `false` | **Experimental.** Address a 1:1 send to the contact's LID when we already hold the mapping, instead of keeping the phone number you passed on the wire envelope. Off by default — see `Amarula.Connection.resolve_pn_to_lid?/1`. |
   | `:headers` / `:origin` / `:agent` | see defaults | HTTP/WS handshake |
 
       Amarula.new(%{profile: :me, sync_full_history: false}) |> Amarula.connect()
@@ -123,6 +124,7 @@ defmodule Amarula.Config do
     sync_full_history: true,
     sync_history: true,
     sync_app_state: true,
+    resolve_pn_to_lid: false,
     country_code: "US",
     mcc: "000",
     mnc: "000",

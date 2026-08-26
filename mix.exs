@@ -12,7 +12,7 @@ defmodule Amarula.MixProject do
   def project do
     [
       app: :amarula,
-      version: "0.5.9",
+      version: "0.5.10",
       elixir: "~> 1.18",
       start_permanent: Mix.env() == :prod,
       elixirc_paths: elixirc_paths(Mix.env()),
@@ -179,14 +179,16 @@ defmodule Amarula.MixProject do
       check: ["format", "test"],
       # The full gate, matching what .github/workflows/elixir.yml enforces plus
       # Dialyzer. `format` rewrites first so `--check-formatted` only fails when
-      # something is genuinely unformattable. Credo is informational until the
-      # existing backlog is cleared — same call the workflow makes.
+      # something is genuinely unformattable. Credo is blocking and non-strict —
+      # the exact call the workflow makes. `--strict` is deliberately not used:
+      # it adds ~64 low-priority findings the workflow never checks, so a strict
+      # local gate would fail on code CI accepts.
       ci: [
         "format",
         "compile --warnings-as-errors",
         "format --check-formatted",
         "test",
-        "credo --strict --mute-exit-status",
+        "credo",
         "dialyzer"
       ]
     ]
