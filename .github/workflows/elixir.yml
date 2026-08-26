@@ -4,6 +4,12 @@ on:
   push:
     branches:
       - main
+      # This fork's integration branch — the one actually developed on and
+      # deployed from. Without it, `on.push` covers only a branch that is a
+      # pure mirror of upstream, so every commit that is genuinely ours would
+      # reach production having been checked by nothing but a local `mix ci`.
+      # (Fork-local line: expect it as a conflict when merging upstream.)
+      - fork_diff
   pull_request:
   # The audit job needs a trigger that doesn't depend on us pushing: an advisory
   # is published on someone else's schedule. GHSA-rv48-qqj5-crxg sat in a shipped
