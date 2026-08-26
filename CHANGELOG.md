@@ -33,6 +33,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nomes de elemento/atributo injetados verbatim). Dependência transitiva, via
   `qr_code`, que pede `~> 2.3` — coube sem mexer em nenhuma restrição nossa.
 
+  Enviado para o upstream em tubedude/amarula#90, onde o mesmo advisory deixa o
+  `main` (nosso espelho puro) vermelho. Quando entrar lá, nosso `main` herda o
+  verde sem precisar de commit próprio.
+
+### Added
+
+- **O CI passou a rodar na `fork_diff`.** O `on.push.branches` do workflow
+  listava só `main` — que neste fork é espelho puro do upstream. Ou seja: todo
+  commit que é de fato nosso chegava à branch de trabalho sem nunca ter passado
+  pelo GitHub Actions, com o `mix ci` local como único gate. A `fork_diff` agora
+  roda a matriz completa (Elixir 1.18/OTP 27, 1.19/28, 1.20/29), que o par local
+  não cobre. A linha é do fork: espere-a como conflito nos merges do upstream.
+
 ## [0.5.10-fork_diff] - 2026-08-26
 
 Sincronização com o upstream: `tubedude/amarula` v0.5.8 mergeado no fork. As
